@@ -1,0 +1,8 @@
+# Ignore the official T3 Code desktop app
+/t3code/
+
+# Ignore everything else in root except the iOS project and this file
+/*
+!T3 Code/
+!.gitignore
+t3code/
