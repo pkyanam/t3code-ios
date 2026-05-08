@@ -4,6 +4,9 @@ struct ThreadsListView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var showNewThread: Bool = false
     @State private var selectedProjectFilter: ProjectID? = nil
+    @State private var pendingThreadAction: ThreadShell?
+    @State private var pendingDeleteThread: ThreadShell?
+    @State private var actionError: String?
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
 
     var body: some View {
@@ -15,12 +18,33 @@ struct ThreadsListView: View {
                         .environment(env)
                         .presentationDetents([.large])
                 }
+                .alert("Couldn't update thread",
+                       isPresented: Binding(get: { actionError != nil },
+                                            set: { if !$0 { actionError = nil } })) {
+                    Button("OK", role: .cancel) { actionError = nil }
+                } message: {
+                    Text(actionError ?? "")
+                }
+                .confirmationDialog("Delete this thread?",
+                                    isPresented: Binding(get: { pendingDeleteThread != nil },
+                                                         set: { if !$0 { pendingDeleteThread = nil } }),
+                                    titleVisibility: .visible,
+                                    presenting: pendingDeleteThread) { thread in
+                    Button("Delete", role: .destructive) {
+                        let target = thread
+                        pendingDeleteThread = nil
+                        delete(thread: target)
+                    }
+                    Button("Cancel", role: .cancel) { pendingDeleteThread = nil }
+                } message: { _ in
+                    Text("This thread will be permanently removed from the desktop server.")
+                }
         }
     }
 
     @ViewBuilder
     private var content: some View {
-        if env.threadList.threads.isEmpty && projectsWithoutThreads.isEmpty {
+        if activeThreads.isEmpty && projectsWithoutThreads.isEmpty {
             VStack(spacing: 0) {
                 customNavBar
                     .padding(.horizontal, T3Spacing.lg)
@@ -30,7 +54,7 @@ struct ThreadsListView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(T3Color.surfaceGrouped)
         } else {
-            threadList
+            populatedList
         }
     }
 
@@ -88,35 +112,97 @@ struct ThreadsListView: View {
 
     // MARK: - Populated list
 
-    private var threadList: some View {
+    private var populatedList: some View {
         VStack(spacing: 0) {
             customNavBar
                 .padding(.horizontal, T3Spacing.lg)
                 .padding(.top, T3Spacing.md)
-                .padding(.bottom, T3Spacing.lg)
+                .padding(.bottom, T3Spacing.md)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: T3Spacing.xl) {
+            List {
+                Section {
                     overviewHeader
+                        .listRowInsets(EdgeInsets(top: T3Spacing.xs,
+                                                  leading: T3Spacing.lg,
+                                                  bottom: T3Spacing.md,
+                                                  trailing: T3Spacing.lg))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
 
-                    if !projectsWithoutThreads.isEmpty {
-                        projectSection
-                    }
-
-                    ForEach(filteredGroupedThreads, id: \.0.id) { project, threads in
-                        threadSection(project: project, threads: threads)
+                if !filteredEmptyProjects.isEmpty {
+                    Section {
+                        ForEach(filteredEmptyProjects) { project in
+                            Button {
+                                showNewThread = true
+                            } label: {
+                                EmptyProjectRowContent(project: project, accentColor: accentColor)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(T3Color.surfaceElevated)
+                        }
+                    } header: {
+                        sectionHeader(title: "Projects")
                     }
                 }
-                .padding(.horizontal, T3Spacing.lg)
-                .padding(.bottom, T3Spacing.xxxl)
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(filteredGroupedThreads, id: \.0.id) { project, threads in
+                    Section {
+                        ForEach(threads, id: \.id) { thread in
+                            NavigationLink {
+                                ThreadView(threadShell: thread)
+                                    .environment(env)
+                            } label: {
+                                ThreadRow(thread: thread)
+                            }
+                            .listRowBackground(T3Color.surfaceElevated)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    pendingDeleteThread = thread
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                Button {
+                                    archive(thread: thread)
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                .tint(T3Color.warning)
+                            }
+                            .contextMenu {
+                                Button {
+                                    archive(thread: thread)
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                Button(role: .destructive) {
+                                    pendingDeleteThread = thread
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    } header: {
+                        sectionHeader(title: project.title)
+                    }
+                }
             }
-            .scrollIndicators(.hidden)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(T3Color.surfaceGrouped)
             .refreshable {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }
         .background(T3Color.surfaceGrouped)
+    }
+
+    private func sectionHeader(title: String) -> some View {
+        Text(title.uppercased())
+            .font(T3Typography.caption)
+            .tracking(0.6)
+            .foregroundStyle(T3Color.textTertiary)
+            .padding(.leading, -T3Spacing.xs)
     }
 
     // MARK: - Custom Navigation Bar
@@ -127,7 +213,6 @@ struct ThreadsListView: View {
 
             Spacer(minLength: T3Spacing.sm)
 
-            // Project filter dropdown
             Menu {
                 Button {
                     selectedProjectFilter = nil
@@ -203,110 +288,46 @@ struct ThreadsListView: View {
     }
 
     private var overviewSubtitle: String {
-        let activeCount = env.threadList.threads.filter { $0.archivedAt == nil }.count
+        let activeCount = activeThreads.count
         let projectCount = env.threadList.projects.count
         let threadWord = activeCount == 1 ? "thread" : "threads"
         let projectWord = projectCount == 1 ? "project" : "projects"
         return "\(activeCount) active \(threadWord) across \(projectCount) \(projectWord)"
     }
 
-    // MARK: - Project section (projects without threads)
+    // MARK: - Actions
 
-    private var projectSection: some View {
-        VStack(alignment: .leading, spacing: T3Spacing.sm) {
-            T3Style.SectionHeader(title: "Projects")
-            VStack(spacing: 0) {
-                ForEach(Array(filteredEmptyProjects.enumerated()), id: \.element.id) { index, project in
-                    Button {
-                        showNewThread = true
-                    } label: {
-                        HStack(spacing: T3Spacing.md) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(T3Color.textTertiary)
-                                .frame(width: 26)
-                            VStack(alignment: .leading, spacing: T3Spacing.xs) {
-                                Text(project.title)
-                                    .font(T3Typography.headline)
-                                    .foregroundStyle(T3Color.textPrimary)
-                                    .lineLimit(1)
-                                Text(project.workspaceRoot)
-                                    .font(T3Typography.footnote)
-                                    .foregroundStyle(T3Color.textTertiary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: T3Spacing.md)
-                            Image(systemName: "plus")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(accentColor)
-                                .frame(width: 26, height: 26)
-                                .background(accentColor.opacity(0.16), in: Circle())
-                        }
-                        .padding(.vertical, T3Spacing.md)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    if index < filteredEmptyProjects.count - 1 {
-                        Divider()
-                            .overlay(T3Color.separator)
-                            .padding(.leading, 38)
-                    }
-                }
+    private func archive(thread: ThreadShell) {
+        guard let client = env.client else { return }
+        Task {
+            do {
+                try await client.archiveThread(threadId: thread.id)
+            } catch {
+                await MainActor.run { actionError = error.localizedDescription }
             }
-            .padding(.horizontal, T3Spacing.md)
-            .background(T3Color.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous)
-                    .stroke(T3Color.separator, lineWidth: 0.5)
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Thread sections (per project)
-
-    private func threadSection(project: ProjectShell, threads: [ThreadShell]) -> some View {
-        VStack(alignment: .leading, spacing: T3Spacing.sm) {
-            T3Style.SectionHeader(title: project.title)
-            VStack(spacing: 0) {
-                ForEach(Array(threads.enumerated()), id: \.element.id) { index, thread in
-                    NavigationLink {
-                        ThreadView(threadShell: thread)
-                            .environment(env)
-                    } label: {
-                        ThreadRow(thread: thread)
-                    }
-                    .buttonStyle(.plain)
-
-                    if index < threads.count - 1 {
-                        Divider()
-                            .overlay(T3Color.separator)
-                            .padding(.leading, 38)
-                    }
-                }
+    private func delete(thread: ThreadShell) {
+        guard let client = env.client else { return }
+        Task {
+            do {
+                try await client.deleteThread(threadId: thread.id)
+            } catch {
+                await MainActor.run { actionError = error.localizedDescription }
             }
-            .padding(.horizontal, T3Spacing.md)
-            .background(T3Color.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous)
-                    .stroke(T3Color.separator, lineWidth: 0.5)
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Filtered data
 
+    private var activeThreads: [ThreadShell] {
+        env.threadList.threads.filter { $0.archivedAt == nil }
+    }
+
     private var groupedThreads: [(ProjectShell, [ThreadShell])] {
-        let active = env.threadList.threads.filter { $0.archivedAt == nil }
         var byProject: [ProjectID: [ThreadShell]] = [:]
-        for t in active { byProject[t.projectId, default: []].append(t) }
+        for t in activeThreads { byProject[t.projectId, default: []].append(t) }
         return env.threadList.projects.compactMap { project in
             guard let threads = byProject[project.id], !threads.isEmpty else { return nil }
             return (project, threads)
@@ -319,9 +340,7 @@ struct ThreadsListView: View {
     }
 
     private var projectsWithoutThreads: [ProjectShell] {
-        let projectIdsWithThreads = Set(env.threadList.threads
-            .filter { $0.archivedAt == nil }
-            .map(\.projectId))
+        let projectIdsWithThreads = Set(activeThreads.map(\.projectId))
         return env.threadList.projects.filter { !projectIdsWithThreads.contains($0.id) }
     }
 
@@ -332,5 +351,40 @@ struct ThreadsListView: View {
 
     private var accentColor: Color {
         AppAccent.color(for: accentRaw)
+    }
+}
+
+// MARK: - Empty Project Row
+
+private struct EmptyProjectRowContent: View {
+    let project: ProjectShell
+    let accentColor: Color
+
+    var body: some View {
+        HStack(spacing: T3Spacing.md) {
+            Image(systemName: "folder")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(T3Color.textTertiary)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: T3Spacing.xs) {
+                Text(project.title)
+                    .font(T3Typography.headline)
+                    .foregroundStyle(T3Color.textPrimary)
+                    .lineLimit(1)
+                Text(project.workspaceRoot)
+                    .font(T3Typography.footnote)
+                    .foregroundStyle(T3Color.textTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: T3Spacing.md)
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(accentColor)
+                .frame(width: 26, height: 26)
+                .background(accentColor.opacity(0.16), in: Circle())
+        }
+        .padding(.vertical, T3Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }

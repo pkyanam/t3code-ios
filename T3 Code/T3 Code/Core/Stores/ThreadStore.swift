@@ -7,6 +7,10 @@ final class ThreadStore {
     var detail: ThreadDetail?
     var messages: [Message] = []
     var session: OrchestrationSession?
+    var proposedPlans: [ProposedPlan] = []
+    var activities: [ThreadActivity] = []
+    var pendingApprovals: [PendingApproval] = []
+    var pendingUserInputs: [PendingUserInput] = []
     var lastError: String?
     var isSending: Bool = false
 
@@ -29,6 +33,19 @@ final class ThreadStore {
     func stop() async {
         if let sub = subscription { await sub.cancel() }
         subscription = nil
+    }
+
+    var latestProposedPlan: ProposedPlan? {
+        let sortedPlans = proposedPlans.sorted { $0.updatedAt < $1.updatedAt }
+        guard let plan = sortedPlans.last else { return nil }
+        guard plan.implementedAt == nil else { return nil }
+        return plan
+    }
+
+    var isTurnRunning: Bool {
+        if let session, session.status == .running { return true }
+        if let state = detail?.latestTurn?.state, state == .running { return true }
+        return isSending
     }
 
     func sendMessage(text: String,
@@ -61,6 +78,89 @@ final class ThreadStore {
         }
     }
 
+    func interruptTurn() async {
+        guard let client else { return }
+        do {
+            try await client.interruptTurn(threadId: threadId,
+                                           turnId: detail?.latestTurn?.turnId)
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
+    func respondApproval(_ approval: PendingApproval, decision: ApprovalDecision) async {
+        guard let client else { return }
+        await MainActor.run {
+            self.pendingApprovals.removeAll { $0.requestId == approval.requestId }
+        }
+        do {
+            try await client.respondApproval(threadId: threadId,
+                                             requestId: approval.requestId,
+                                             decision: decision)
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
+    func respondUserInput(_ input: PendingUserInput,
+                          answers: [String: Any]) async {
+        guard let client else { return }
+        await MainActor.run {
+            self.pendingUserInputs.removeAll { $0.requestId == input.requestId }
+        }
+        do {
+            try await client.respondUserInput(threadId: threadId,
+                                              requestId: input.requestId,
+                                              answers: answers)
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
+    func setInteractionMode(_ mode: ProviderInteractionMode) async {
+        guard let client, detail?.interactionMode != mode else { return }
+        do {
+            try await client.setInteractionMode(threadId: threadId, mode: mode)
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
+    func setRuntimeMode(_ mode: RuntimeMode) async {
+        guard let client, detail?.runtimeMode != mode else { return }
+        do {
+            try await client.setRuntimeMode(threadId: threadId, mode: mode)
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
+    func updateModelSelection(_ selection: ModelSelection) async {
+        guard let client else { return }
+        do {
+            try await client.updateThreadModelSelection(threadId: threadId,
+                                                        modelSelection: selection)
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
+    func implementProposedPlan(_ plan: ProposedPlan) async {
+        guard let client, let detail else { return }
+        do {
+            try await client.startTurnFromProposedPlan(
+                threadId: threadId,
+                planId: plan.id,
+                sourceThreadId: threadId,
+                modelSelection: detail.modelSelection,
+                runtimeMode: detail.runtimeMode,
+                interactionMode: .default
+            )
+        } catch {
+            await MainActor.run { self.lastError = error.localizedDescription }
+        }
+    }
+
     @MainActor
     private func handle(item: ThreadStreamItem) {
         switch item {
@@ -68,6 +168,9 @@ final class ThreadStore {
             self.detail = detail
             self.messages = detail.messages.sorted { $0.createdAt < $1.createdAt }
             self.session = detail.session
+            self.proposedPlans = detail.proposedPlans
+            self.activities = detail.activities
+            recomputePending()
         case .event(let event):
             apply(event)
         }
@@ -77,41 +180,136 @@ final class ThreadStore {
     private func apply(_ event: ThreadEvent) {
         switch event.type {
         case "thread.message-sent":
-            guard let messageIdRaw = event.payload["messageId"] as? String,
-                  let roleRaw = event.payload["role"] as? String,
-                  let role = MessageRole(rawValue: roleRaw),
-                  let text = event.payload["text"] as? String else { return }
-            let createdAt = (event.payload["createdAt"] as? String).flatMap(ISO8601Decoder.parse) ?? Date()
-            let updatedAt = (event.payload["updatedAt"] as? String).flatMap(ISO8601Decoder.parse) ?? createdAt
-            let streaming = (event.payload["streaming"] as? Bool) ?? false
-            let turnId = (event.payload["turnId"] as? String).map { TurnID(rawValue: $0) }
-            let id = MessageID(rawValue: messageIdRaw)
-            if let i = messages.firstIndex(where: { $0.id == id }) {
-                messages[i].text = text
-                messages[i].streaming = streaming
-                messages[i].updatedAt = updatedAt
-            } else {
-                let msg = Message(id: id, role: role, text: text,
-                                  attachments: nil, turnId: turnId,
-                                  streaming: streaming, createdAt: createdAt,
-                                  updatedAt: updatedAt)
-                messages.append(msg)
-                messages.sort { $0.createdAt < $1.createdAt }
-            }
+            applyMessageSent(event)
         case "thread.session-set":
             if let sessionDict = event.payload["session"] as? [String: Any],
                let data = try? JSONSerialization.data(withJSONObject: sessionDict),
                let session = try? JSONDecoder().decode(OrchestrationSession.self, from: data) {
                 self.session = session
+                if var detail = self.detail {
+                    detail.session = session
+                    self.detail = detail
+                }
             }
         case "thread.meta-updated":
-            if var detail = self.detail {
-                if let title = event.payload["title"] as? String { detail.title = title }
+            applyMetaUpdated(event)
+        case "thread.runtime-mode-set":
+            if let raw = event.payload["runtimeMode"] as? String,
+               let mode = RuntimeMode(rawValue: raw),
+               var detail = self.detail {
+                detail.runtimeMode = mode
                 self.detail = detail
+            }
+        case "thread.interaction-mode-set":
+            if let raw = event.payload["interactionMode"] as? String,
+               let mode = ProviderInteractionMode(rawValue: raw),
+               var detail = self.detail {
+                detail.interactionMode = mode
+                self.detail = detail
+            }
+        case "thread.archived":
+            if var detail = self.detail {
+                detail.archivedAt = (event.payload["archivedAt"] as? String).flatMap(ISO8601Decoder.parse) ?? Date()
+                self.detail = detail
+            }
+        case "thread.unarchived":
+            if var detail = self.detail {
+                detail.archivedAt = nil
+                self.detail = detail
+            }
+        case "thread.activity-appended":
+            if let activityDict = event.payload["activity"] as? [String: Any],
+               let activity = ThreadActivity.decode(from: activityDict) {
+                upsertActivity(activity)
+                recomputePending()
+            }
+        case "thread.proposed-plan-upserted":
+            if let planDict = event.payload["proposedPlan"] as? [String: Any],
+               let plan = ProposedPlan.decode(from: planDict) {
+                if let i = proposedPlans.firstIndex(where: { $0.id == plan.id }) {
+                    proposedPlans[i] = plan
+                } else {
+                    proposedPlans.append(plan)
+                }
+                if var detail = self.detail {
+                    if let i = detail.proposedPlans.firstIndex(where: { $0.id == plan.id }) {
+                        detail.proposedPlans[i] = plan
+                    } else {
+                        detail.proposedPlans.append(plan)
+                    }
+                    self.detail = detail
+                }
             }
         default:
             break
         }
+    }
+
+    @MainActor
+    private func applyMessageSent(_ event: ThreadEvent) {
+        guard let messageIdRaw = event.payload["messageId"] as? String,
+              let roleRaw = event.payload["role"] as? String,
+              let role = MessageRole(rawValue: roleRaw),
+              let text = event.payload["text"] as? String else { return }
+        let createdAt = (event.payload["createdAt"] as? String).flatMap(ISO8601Decoder.parse) ?? Date()
+        let updatedAt = (event.payload["updatedAt"] as? String).flatMap(ISO8601Decoder.parse) ?? createdAt
+        let streaming = (event.payload["streaming"] as? Bool) ?? false
+        let turnId = (event.payload["turnId"] as? String).map { TurnID(rawValue: $0) }
+        let id = MessageID(rawValue: messageIdRaw)
+        if let i = messages.firstIndex(where: { $0.id == id }) {
+            messages[i].text = text
+            messages[i].streaming = streaming
+            messages[i].updatedAt = updatedAt
+        } else {
+            let msg = Message(id: id, role: role, text: text,
+                              attachments: nil, turnId: turnId,
+                              streaming: streaming, createdAt: createdAt,
+                              updatedAt: updatedAt)
+            messages.append(msg)
+            messages.sort { $0.createdAt < $1.createdAt }
+        }
+    }
+
+    @MainActor
+    private func applyMetaUpdated(_ event: ThreadEvent) {
+        guard var detail = self.detail else { return }
+        if let title = event.payload["title"] as? String {
+            detail.title = title
+        }
+        if let modelDict = event.payload["modelSelection"] as? [String: Any],
+           let data = try? JSONSerialization.data(withJSONObject: modelDict),
+           let selection = try? JSONDecoder().decode(ModelSelection.self, from: data) {
+            detail.modelSelection = selection
+        }
+        if let branch = event.payload["branch"] as? String {
+            detail.branch = branch
+        } else if event.payload["branch"] is NSNull {
+            detail.branch = nil
+        }
+        self.detail = detail
+    }
+
+    @MainActor
+    private func upsertActivity(_ activity: ThreadActivity) {
+        if let i = activities.firstIndex(where: { $0.id == activity.id }) {
+            activities[i] = activity
+        } else {
+            activities.append(activity)
+        }
+        if var detail = self.detail {
+            if let i = detail.activities.firstIndex(where: { $0.id == activity.id }) {
+                detail.activities[i] = activity
+            } else {
+                detail.activities.append(activity)
+            }
+            self.detail = detail
+        }
+    }
+
+    @MainActor
+    private func recomputePending() {
+        pendingApprovals = PendingDerivation.pendingApprovals(from: activities)
+        pendingUserInputs = PendingDerivation.pendingUserInputs(from: activities)
     }
 }
 

@@ -1,9 +1,16 @@
 import Foundation
 
 actor T3Client {
+    private struct SubscriptionTemplate {
+        let method: String
+        let payload: Any
+        let onValue: (Any) -> Void
+    }
+
     private let connection: T3Connection
     private var pendingResponses: [String: CheckedContinuation<Any?, Error>] = [:]
     private var streamSubscribers: [String: (Any) -> Void] = [:]
+    private var subscriptionTemplates: [String: SubscriptionTemplate] = [:]
     private var demuxTask: Task<Void, Never>?
     private var statusObserverTask: Task<Void, Never>?
     private(set) var status: T3Connection.ConnectionStatus = .offline
@@ -37,6 +44,7 @@ actor T3Client {
         pendingResponses.values.forEach { $0.resume(throwing: T3Error.notConnected) }
         pendingResponses.removeAll()
         streamSubscribers.removeAll()
+        subscriptionTemplates.removeAll()
     }
 
     func addStatusListener(_ listener: @escaping (T3Connection.ConnectionStatus) -> Void) {
@@ -44,10 +52,44 @@ actor T3Client {
         listener(status)
     }
 
-    private func update(status: T3Connection.ConnectionStatus) {
-        self.status = status
+    private func update(status newStatus: T3Connection.ConnectionStatus) async {
+        let wasConnected = (self.status == .connected)
+        self.status = newStatus
         for listener in statusListeners {
-            listener(status)
+            listener(newStatus)
+        }
+        switch newStatus {
+        case .connected:
+            await resubscribeAll()
+        case .offline, .error, .connecting:
+            if wasConnected {
+                failPendingRequests()
+            }
+        }
+    }
+
+    private func failPendingRequests() {
+        guard !pendingResponses.isEmpty else { return }
+        let waiters = pendingResponses
+        pendingResponses.removeAll()
+        for cont in waiters.values {
+            cont.resume(throwing: T3Error.notConnected)
+        }
+    }
+
+    private func resubscribeAll() async {
+        guard !subscriptionTemplates.isEmpty else { return }
+        for (id, template) in subscriptionTemplates {
+            do {
+                try await connection.send([
+                    .streamRequest(id: id,
+                                   tag: template.method,
+                                   payload: template.payload,
+                                   headers: [])
+                ])
+            } catch {
+                NSLog("Failed to resubscribe to \(template.method): \(error)")
+            }
         }
     }
 
@@ -62,6 +104,7 @@ actor T3Client {
                 }
             }
             streamSubscribers.removeValue(forKey: requestId)
+            subscriptionTemplates.removeValue(forKey: requestId)
         case let .chunk(requestId, values):
             if let listener = streamSubscribers[requestId] {
                 for v in values {
@@ -77,6 +120,7 @@ actor T3Client {
             }
             pendingResponses.removeAll()
             streamSubscribers.removeAll()
+            subscriptionTemplates.removeAll()
         default:
             break
         }
@@ -103,6 +147,9 @@ actor T3Client {
                    onValue: @escaping (Any) -> Void) async throws -> StreamSubscription {
         let id = await connection.nextRequestId()
         streamSubscribers[id] = onValue
+        subscriptionTemplates[id] = SubscriptionTemplate(method: method,
+                                                         payload: payload,
+                                                         onValue: onValue)
         try await connection.send([
             .streamRequest(id: id, tag: method, payload: payload, headers: [])
         ])
@@ -111,6 +158,7 @@ actor T3Client {
 
     func cancel(requestId: String) async {
         streamSubscribers.removeValue(forKey: requestId)
+        subscriptionTemplates.removeValue(forKey: requestId)
         pendingResponses.removeValue(forKey: requestId)?
             .resume(throwing: CancellationError())
         try? await connection.send([
@@ -242,6 +290,161 @@ extension T3Client {
         }
         let data = try JSONSerialization.data(withJSONObject: value)
         return try JSONDecoder().decode(ServerRuntimeConfig.self, from: data)
+    }
+
+    // MARK: - Mutating orchestration commands
+
+    func interruptTurn(threadId: ThreadID, turnId: TurnID? = nil) async throws {
+        var payload: [String: Any] = [
+            "type": "thread.turn.interrupt",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "createdAt": ISO8601Decoder.formatter.string(from: Date())
+        ]
+        if let turnId {
+            payload["turnId"] = turnId.rawValue
+        }
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func respondApproval(threadId: ThreadID,
+                         requestId: ApprovalRequestID,
+                         decision: ApprovalDecision) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.approval.respond",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "requestId": requestId.rawValue,
+            "decision": decision.rawValue,
+            "createdAt": ISO8601Decoder.formatter.string(from: Date())
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func respondUserInput(threadId: ThreadID,
+                          requestId: ApprovalRequestID,
+                          answers: [String: Any]) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.user-input.respond",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "requestId": requestId.rawValue,
+            "answers": answers,
+            "createdAt": ISO8601Decoder.formatter.string(from: Date())
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func setRuntimeMode(threadId: ThreadID, mode: RuntimeMode) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.runtime-mode.set",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "runtimeMode": mode.rawValue,
+            "createdAt": ISO8601Decoder.formatter.string(from: Date())
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func setInteractionMode(threadId: ThreadID, mode: ProviderInteractionMode) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.interaction-mode.set",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "interactionMode": mode.rawValue,
+            "createdAt": ISO8601Decoder.formatter.string(from: Date())
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func updateThreadModelSelection(threadId: ThreadID, modelSelection: ModelSelection) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.meta.update",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "modelSelection": modelSelection.encoded
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func renameThread(threadId: ThreadID, title: String) async throws {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let payload: [String: Any] = [
+            "type": "thread.meta.update",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "title": trimmed
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func archiveThread(threadId: ThreadID) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.archive",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func unarchiveThread(threadId: ThreadID) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.unarchive",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func deleteThread(threadId: ThreadID) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.delete",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func stopSession(threadId: ThreadID) async throws {
+        let payload: [String: Any] = [
+            "type": "thread.session.stop",
+            "commandId": CommandID.new().rawValue,
+            "threadId": threadId.rawValue,
+            "createdAt": ISO8601Decoder.formatter.string(from: Date())
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
+    }
+
+    func startTurnFromProposedPlan(threadId: ThreadID,
+                                   planId: String,
+                                   sourceThreadId: ThreadID,
+                                   modelSelection: ModelSelection,
+                                   runtimeMode: RuntimeMode,
+                                   interactionMode: ProviderInteractionMode) async throws {
+        let messageId = MessageID.newClientID().rawValue
+        let commandId = CommandID.new().rawValue
+        let now = ISO8601Decoder.formatter.string(from: Date())
+        let payload: [String: Any] = [
+            "type": "thread.turn.start",
+            "commandId": commandId,
+            "threadId": threadId.rawValue,
+            "message": [
+                "messageId": messageId,
+                "role": "user",
+                "text": "Implement the proposed plan.",
+                "attachments": []
+            ],
+            "modelSelection": modelSelection.encoded,
+            "runtimeMode": runtimeMode.rawValue,
+            "interactionMode": interactionMode.rawValue,
+            "sourceProposedPlan": [
+                "threadId": sourceThreadId.rawValue,
+                "planId": planId
+            ],
+            "createdAt": now
+        ]
+        _ = try await request(method: "orchestration.dispatchCommand", payload: payload)
     }
 
     private static func titleSeed(text: String, attachments: [UploadImage]) -> String {

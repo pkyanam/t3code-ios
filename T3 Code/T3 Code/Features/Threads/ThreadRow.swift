@@ -43,9 +43,14 @@ struct ThreadRow: View {
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
 
-                if thread.hasPendingApprovals {
+                if thread.hasPendingApprovals || thread.hasPendingUserInput {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(T3Color.warning)
+                        .font(.caption)
+                }
+                if thread.hasActionableProposedPlan {
+                    Image(systemName: "list.bullet.clipboard.fill")
+                        .foregroundStyle(T3Color.primary)
                         .font(.caption)
                 }
 

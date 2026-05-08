@@ -30,6 +30,7 @@ struct SettingsView: View {
                             connectionSection
                             appearanceSection
                             chatSection
+                            archivedThreadsSection
                             serverSection
                             providersSection
                             aboutSection
@@ -227,6 +228,64 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Archived threads
+
+    private var archivedThreadsSection: some View {
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Threads")
+            T3Style.Card(padding: T3Spacing.md) {
+                NavigationLink {
+                    ArchivedThreadsView()
+                        .environment(env)
+                } label: {
+                    HStack(spacing: T3Spacing.md) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(T3Color.textSecondary)
+                            .frame(width: 28, height: 28)
+                            .background(T3Color.surfaceMuted, in: Circle())
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Archived threads")
+                                .font(T3Typography.body)
+                                .foregroundStyle(T3Color.textPrimary)
+                            Text(archivedSubtitle)
+                                .font(T3Typography.footnote)
+                                .foregroundStyle(T3Color.textTertiary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: T3Spacing.sm)
+                        if archivedCount > 0 {
+                            Text("\(archivedCount)")
+                                .font(T3Typography.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(T3Color.textSecondary)
+                                .padding(.horizontal, T3Spacing.sm)
+                                .padding(.vertical, 4)
+                                .background(T3Color.surfaceMuted, in: Capsule())
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(T3Color.textTertiary)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var archivedCount: Int {
+        env.threadList.threads.filter { $0.archivedAt != nil }.count
+    }
+
+    private var archivedSubtitle: String {
+        if archivedCount == 0 {
+            return "No threads archived yet"
+        }
+        return "\(archivedCount) archived thread\(archivedCount == 1 ? "" : "s")"
     }
 
     // MARK: - Server

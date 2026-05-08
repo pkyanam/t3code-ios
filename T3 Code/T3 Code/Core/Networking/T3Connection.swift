@@ -19,7 +19,12 @@ actor T3Connection {
     private var inboundContinuation: AsyncStream<EffectRPCMessage>.Continuation?
     private var heartbeatTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var shouldAutoReconnect: Bool = false
+    private var reconnectAttempt: Int = 0
     private let maximumWebSocketMessageSize = 64 * 1024 * 1024
+    private let maxReconnectDelaySeconds: Double = 30
+    private let baseReconnectDelaySeconds: Double = 1
 
     init(config: Config) {
         self.config = config
@@ -55,11 +60,27 @@ actor T3Connection {
 
     @discardableResult
     func connect() async -> Bool {
-        disconnect()
+        shouldAutoReconnect = true
+        reconnectAttempt = 0
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        return await connectInternal()
+    }
+
+    func disconnect() {
+        shouldAutoReconnect = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        teardownConnection(yieldOffline: true)
+    }
+
+    private func connectInternal() async -> Bool {
+        teardownConnection(yieldOffline: false)
         statusContinuation?.yield(.connecting)
 
         guard var wsURL = makeWebSocketURL() else {
             statusContinuation?.yield(.error("Invalid server URL"))
+            scheduleReconnect()
             return false
         }
 
@@ -73,6 +94,7 @@ actor T3Connection {
             }
         } catch {
             statusContinuation?.yield(.error(formatConnectionError(error)))
+            scheduleReconnect()
             return false
         }
 
@@ -96,9 +118,11 @@ actor T3Connection {
                 self.task = nil
             }
             statusContinuation?.yield(.error(formatWebSocketError(error, task: task)))
+            scheduleReconnect()
             return false
         }
 
+        reconnectAttempt = 0
         receiveTask = Task { [weak self] in
             await self?.receiveLoop()
         }
@@ -110,14 +134,43 @@ actor T3Connection {
         return true
     }
 
-    func disconnect() {
+    private func teardownConnection(yieldOffline: Bool) {
         receiveTask?.cancel()
         heartbeatTask?.cancel()
         receiveTask = nil
         heartbeatTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
-        statusContinuation?.yield(.offline)
+        if yieldOffline {
+            statusContinuation?.yield(.offline)
+        }
+    }
+
+    private func scheduleReconnect() {
+        guard shouldAutoReconnect else { return }
+        reconnectTask?.cancel()
+        reconnectAttempt += 1
+        let delay = backoffDelay(for: reconnectAttempt)
+        reconnectTask = Task { [weak self] in
+            let nanos = UInt64(delay * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
+            guard let self else { return }
+            if Task.isCancelled { return }
+            await self.attemptReconnectIfWanted()
+        }
+    }
+
+    private func attemptReconnectIfWanted() async {
+        guard shouldAutoReconnect else { return }
+        _ = await connectInternal()
+    }
+
+    private func backoffDelay(for attempt: Int) -> Double {
+        let exponent = min(attempt - 1, 6)
+        let base = baseReconnectDelaySeconds * pow(2.0, Double(exponent))
+        let capped = min(base, maxReconnectDelaySeconds)
+        let jitter = Double.random(in: 0...0.4)
+        return capped + jitter
     }
 
     func send(_ messages: [EffectRPCMessage]) async throws {
@@ -156,6 +209,7 @@ actor T3Connection {
                 }
                 self.task = nil
                 statusContinuation?.yield(.error(formatWebSocketError(error, task: task)))
+                scheduleReconnect()
                 return
             }
         }

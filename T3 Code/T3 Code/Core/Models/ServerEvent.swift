@@ -108,8 +108,7 @@ extension ThreadStreamItem {
                     debugDescription: "Bad snapshot shape"))
             }
             let threadObj = snap["thread"] ?? [:]
-            let threadData = try JSONSerialization.data(withJSONObject: threadObj)
-            let detail = try JSONDecoder().decode(ThreadDetail.self, from: threadData)
+            let detail = try ThreadDetail.decode(from: threadObj)
             return .snapshot(detail, snapshotSequence: sequence)
         case "event":
             guard let event = dict["event"] as? [String: Any],

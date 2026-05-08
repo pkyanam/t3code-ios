@@ -161,7 +161,7 @@ struct ThreadShell: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-struct ThreadDetail: Codable, Hashable, Sendable, Identifiable {
+struct ThreadDetail: Hashable, Sendable, Identifiable {
     let id: ThreadID
     let projectId: ProjectID
     var title: String
@@ -176,6 +176,66 @@ struct ThreadDetail: Codable, Hashable, Sendable, Identifiable {
     var archivedAt: Date?
     var messages: [Message]
     var session: OrchestrationSession?
+    var proposedPlans: [ProposedPlan]
+    var activities: [ThreadActivity]
+}
+
+extension ThreadDetail {
+    nonisolated static func decode(from any: Any) throws -> ThreadDetail {
+        let data = try JSONSerialization.data(withJSONObject: any)
+        guard let dict = any as? [String: Any] else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [],
+                debugDescription: "ThreadDetail expected an object"))
+        }
+        let baseDict = dict.filter { key, _ in
+            !["proposedPlans", "activities"].contains(key)
+        }
+        let baseData = try JSONSerialization.data(withJSONObject: baseDict)
+        let decoder = JSONDecoder()
+        let base = try decoder.decode(BaseThreadDetail.self, from: baseData)
+        _ = data
+
+        let proposedPlans: [ProposedPlan] = (dict["proposedPlans"] as? [[String: Any]] ?? [])
+            .compactMap { ProposedPlan.decode(from: $0) }
+        let activities: [ThreadActivity] = (dict["activities"] as? [[String: Any]] ?? [])
+            .compactMap { ThreadActivity.decode(from: $0) }
+
+        return ThreadDetail(
+            id: base.id,
+            projectId: base.projectId,
+            title: base.title,
+            modelSelection: base.modelSelection,
+            runtimeMode: base.runtimeMode,
+            interactionMode: base.interactionMode,
+            branch: base.branch,
+            worktreePath: base.worktreePath,
+            latestTurn: base.latestTurn,
+            createdAt: base.createdAt,
+            updatedAt: base.updatedAt,
+            archivedAt: base.archivedAt,
+            messages: base.messages.sorted { $0.createdAt < $1.createdAt },
+            session: base.session,
+            proposedPlans: proposedPlans,
+            activities: activities
+        )
+    }
+}
+
+private struct BaseThreadDetail: Decodable {
+    let id: ThreadID
+    let projectId: ProjectID
+    let title: String
+    let modelSelection: ModelSelection
+    let runtimeMode: RuntimeMode
+    let interactionMode: ProviderInteractionMode
+    let branch: String?
+    let worktreePath: String?
+    let latestTurn: LatestTurn?
+    let createdAt: Date
+    let updatedAt: Date
+    let archivedAt: Date?
+    let messages: [Message]
+    let session: OrchestrationSession?
 
     private enum CodingKeys: String, CodingKey {
         case id, projectId, title, modelSelection, runtimeMode, interactionMode, branch,
@@ -198,24 +258,6 @@ struct ThreadDetail: Codable, Hashable, Sendable, Identifiable {
         archivedAt = (try c.decodeIfPresent(String.self, forKey: .archivedAt)).flatMap(ISO8601Decoder.parse)
         messages = (try? c.decode([Message].self, forKey: .messages)) ?? []
         session = try c.decodeIfPresent(OrchestrationSession.self, forKey: .session)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(id, forKey: .id)
-        try c.encode(projectId, forKey: .projectId)
-        try c.encode(title, forKey: .title)
-        try c.encode(modelSelection, forKey: .modelSelection)
-        try c.encode(runtimeMode, forKey: .runtimeMode)
-        try c.encode(interactionMode, forKey: .interactionMode)
-        try c.encodeIfPresent(branch, forKey: .branch)
-        try c.encodeIfPresent(worktreePath, forKey: .worktreePath)
-        try c.encodeIfPresent(latestTurn, forKey: .latestTurn)
-        try c.encode(ISO8601Decoder.formatter.string(from: createdAt), forKey: .createdAt)
-        try c.encode(ISO8601Decoder.formatter.string(from: updatedAt), forKey: .updatedAt)
-        if let archivedAt { try c.encode(ISO8601Decoder.formatter.string(from: archivedAt), forKey: .archivedAt) }
-        try c.encode(messages, forKey: .messages)
-        try c.encodeIfPresent(session, forKey: .session)
     }
 }
 

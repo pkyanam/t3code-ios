@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 
 struct ComposerView: View {
+    @Environment(AppEnvironment.self) private var env
     @Bindable var store: ThreadStore
     @State private var draft: String = ""
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -69,27 +70,7 @@ struct ComposerView: View {
 
     private var controlRow: some View {
         HStack(spacing: T3Spacing.sm) {
-            // Model selector
-            Menu {
-                Text(modelName)
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(accentColor)
-                    Text(modelName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(T3Color.textPrimary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(T3Color.textTertiary)
-                }
-                .padding(.horizontal, T3Spacing.sm)
-                .padding(.vertical, 6)
-                .background(T3Color.surfaceMuted, in: Capsule())
-                .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
-            }
+            modelMenu
 
             Spacer(minLength: 0)
 
@@ -106,9 +87,27 @@ struct ComposerView: View {
             }
             .disabled(attachments.count >= maxAttachments)
 
-            // Send / stop
+            sendOrStopButton
+        }
+    }
+
+    @ViewBuilder
+    private var sendOrStopButton: some View {
+        if isTurnRunning {
+            Button {
+                Task { await store.interruptTurn() }
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(T3Color.danger)
+                    .clipShape(Circle())
+            }
+            .accessibilityLabel("Stop turn")
+        } else {
             Button(action: send) {
-                Image(systemName: store.isSending ? "stop.fill" : "arrow.up")
+                Image(systemName: "arrow.up")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
@@ -116,7 +115,71 @@ struct ComposerView: View {
                     .clipShape(Circle())
             }
             .disabled(!canSend)
+            .accessibilityLabel("Send message")
         }
+    }
+
+    private var isTurnRunning: Bool {
+        store.isTurnRunning
+    }
+
+    @ViewBuilder
+    private var modelMenu: some View {
+        let providers = providersForCurrentInstance()
+        Menu {
+            if providers.isEmpty {
+                Text(modelName)
+            } else {
+                ForEach(providers, id: \.instanceId) { provider in
+                    Section(provider.label) {
+                        ForEach(provider.models) { model in
+                            Button {
+                                Task { await selectModel(provider: provider, slug: model.slug) }
+                            } label: {
+                                if isCurrentModel(provider: provider, slug: model.slug) {
+                                    Label(model.label, systemImage: "checkmark")
+                                } else {
+                                    Text(model.label)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(accentColor)
+                Text(modelName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(T3Color.textPrimary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(T3Color.textTertiary)
+            }
+            .padding(.horizontal, T3Spacing.sm)
+            .padding(.vertical, 6)
+            .background(T3Color.surfaceMuted, in: Capsule())
+            .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+        }
+    }
+
+    private func providersForCurrentInstance() -> [ServerProvider] {
+        guard let providers = env.serverConfig?.providers else { return [] }
+        return providers.filter(\.isUsable).sorted { $0.label < $1.label }
+    }
+
+    private func isCurrentModel(provider: ServerProvider, slug: String) -> Bool {
+        guard let detail = store.detail else { return false }
+        return detail.modelSelection.instanceId == provider.instanceId
+            && detail.modelSelection.model == slug
+    }
+
+    private func selectModel(provider: ServerProvider, slug: String) async {
+        let selection = ModelSelection(instanceId: provider.instanceId, model: slug)
+        await store.updateModelSelection(selection)
     }
 
     // MARK: - Attachments
