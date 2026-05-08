@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct NewThreadView: View {
     @Environment(AppEnvironment.self) private var env
@@ -12,11 +13,14 @@ struct NewThreadView: View {
     @State private var interactionMode: ProviderInteractionMode = .default
     @State private var isCreating = false
     @State private var errorMessage: String?
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var attachments: [LocalAttachment] = []
     @FocusState private var promptFocused: Bool
 
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
 
     private let maxChars = 120_000
+    private let maxAttachments = 8
 
     var body: some View {
         NavigationStack {
@@ -58,6 +62,9 @@ struct NewThreadView: View {
             .onChange(of: env.serverConfig?.providers) { _, _ in applyInitialSelections() }
             .onChange(of: selectedProviderId) { _, _ in
                 selectedModel = resolvedModelForSelectedProvider()
+            }
+            .onChange(of: pickerItems) { _, items in
+                Task { await loadAttachments(items) }
             }
         }
     }
@@ -164,28 +171,52 @@ struct NewThreadView: View {
         VStack(alignment: .leading, spacing: T3Spacing.sm) {
             T3Style.SectionHeader(title: "Message")
             T3Style.Card(padding: T3Spacing.md) {
-                VStack(alignment: .leading, spacing: T3Spacing.xs) {
-                    ZStack(alignment: .topLeading) {
-                        if prompt.isEmpty {
-                            Text("Ask T3 Code…")
-                                .foregroundStyle(T3Color.textTertiary)
-                                .font(T3Typography.body)
-                                .padding(.top, 8)
-                                .padding(.leading, 5)
-                                .allowsHitTesting(false)
+                VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                    if !attachments.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: T3Spacing.sm) {
+                                ForEach(attachments) { attachment in
+                                    AttachmentChip(attachment: attachment) {
+                                        attachments.removeAll { $0.id == attachment.id }
+                                    }
+                                }
+                            }
                         }
-                        TextEditor(text: $prompt)
-                            .focused($promptFocused)
-                            .frame(minHeight: 120, maxHeight: 220)
-                            .scrollContentBackground(.hidden)
-                            .font(T3Typography.body)
                     }
-                    HStack {
-                        Spacer()
-                        Text("\(prompt.count) / \(maxChars)")
-                            .font(T3Typography.caption)
-                            .foregroundStyle(prompt.count > maxChars ? T3Color.danger : T3Color.textTertiary)
-                            .monospacedDigit()
+                    VStack(alignment: .leading, spacing: T3Spacing.xs) {
+                        ZStack(alignment: .topLeading) {
+                            if prompt.isEmpty {
+                                Text("Ask T3 Code…")
+                                    .foregroundStyle(T3Color.textTertiary)
+                                    .font(T3Typography.body)
+                                    .padding(.top, 8)
+                                    .padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                            }
+                            TextEditor(text: $prompt)
+                                .focused($promptFocused)
+                                .frame(minHeight: 120, maxHeight: 220)
+                                .scrollContentBackground(.hidden)
+                                .font(T3Typography.body)
+                        }
+                        HStack {
+                            PhotosPicker(selection: $pickerItems,
+                                         maxSelectionCount: maxAttachments,
+                                         matching: .images) {
+                                Label("Photos", systemImage: "paperclip")
+                                    .font(T3Typography.footnote)
+                                    .foregroundStyle(attachments.count >= maxAttachments
+                                                     ? T3Color.textTertiary
+                                                     : T3Color.textSecondary)
+                            }
+                            .disabled(attachments.count >= maxAttachments)
+
+                            Spacer()
+                            Text("\(prompt.count) / \(maxChars)")
+                                .font(T3Typography.caption)
+                                .foregroundStyle(prompt.count > maxChars ? T3Color.danger : T3Color.textTertiary)
+                                .monospacedDigit()
+                        }
                     }
                 }
             }
@@ -198,50 +229,48 @@ struct NewThreadView: View {
         VStack(alignment: .leading, spacing: T3Spacing.sm) {
             T3Style.SectionHeader(title: "Model")
             T3Style.Card(padding: T3Spacing.md) {
-                VStack(spacing: 0) {
-                    if usableProviders.isEmpty {
-                        Text(providerEmptyMessage)
-                            .font(T3Typography.callout)
-                            .foregroundStyle(T3Color.textSecondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, T3Spacing.sm)
-                    } else {
-                        menuRow(title: "Provider",
-                                value: selectedProvider?.label ?? "Choose") {
-                            ForEach(usableProviders) { provider in
-                                Button {
-                                    selectedProviderId = provider.instanceId
-                                } label: {
-                                    if selectedProviderId == provider.instanceId {
-                                        Label(provider.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(provider.label)
-                                    }
-                                }
+                if usableProviders.isEmpty {
+                    Text(providerEmptyMessage)
+                        .font(T3Typography.callout)
+                        .foregroundStyle(T3Color.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, T3Spacing.sm)
+                } else {
+                    menuRow(title: "Model",
+                            value: newThreadModelSummary) {
+                        ModelCatalogMenuSections(
+                            sections: modelCatalogSections,
+                            accentColor: AppAccent.color(for: accentRaw),
+                            isSelected: isCatalogEntrySelected,
+                            onSelect: { entry in
+                                selectedProviderId = entry.provider.instanceId
+                                selectedModel = entry.model.slug
                             }
-                        }
-                        Divider().overlay(T3Color.separator)
-                        menuRow(title: "Model",
-                                value: selectedModel.isEmpty ? "Default" : selectedModel) {
-                            ForEach(selectedProvider?.models ?? []) { model in
-                                Button {
-                                    selectedModel = model.slug
-                                } label: {
-                                    if selectedModel == model.slug {
-                                        Label(model.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(model.label)
-                                    }
-                                }
-                            }
-                            if (selectedProvider?.models ?? []).isEmpty {
-                                Button("Default") { selectedModel = "" }
-                            }
-                        }
+                        )
                     }
                 }
             }
         }
+    }
+
+    private var modelCatalogSections: [ModelCatalogSection] {
+        ModelCatalogSection.grouped(providers: env.serverConfig?.providers ?? [])
+    }
+
+    private var newThreadModelSummary: String {
+        guard let provider = selectedProvider, !selectedModel.isEmpty else {
+            return "Choose model"
+        }
+        let name = provider.modelLabel(selectedModel)
+        let brand = provider.brandDisplayName
+        if let upstream = provider.upstreamVendorLabel(forModelSlug: selectedModel) {
+            return "\(name) · \(brand) · \(upstream)"
+        }
+        return "\(name) · \(brand) · \(provider.label)"
+    }
+
+    private func isCatalogEntrySelected(_ entry: ModelCatalogEntry) -> Bool {
+        selectedProviderId == entry.provider.instanceId && selectedModel == entry.model.slug
     }
 
     // MARK: - Mode
@@ -300,7 +329,8 @@ struct NewThreadView: View {
                     Text(value)
                         .font(T3Typography.callout)
                         .foregroundStyle(T3Color.textPrimary)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(T3Color.textTertiary)
@@ -341,11 +371,12 @@ struct NewThreadView: View {
     }
 
     private var canCreate: Bool {
-        !isCreating
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !isCreating
             && selectedProject != nil
             && selectedProvider != nil
             && !selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!trimmed.isEmpty || !attachments.isEmpty)
             && prompt.count <= maxChars
     }
 
@@ -365,12 +396,32 @@ struct NewThreadView: View {
         selectedProvider?.defaultModel ?? ""
     }
 
+    private func loadAttachments(_ items: [PhotosPickerItem]) async {
+        var loaded: [LocalAttachment] = []
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            let mime = item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
+            let name = "image-\(UUID().uuidString.prefix(6)).\(mime.split(separator: "/").last ?? "jpg")"
+            let dataUrl = "data:\(mime);base64,\(data.base64EncodedString())"
+            let upload = UploadImage(name: String(name),
+                                     mimeType: mime,
+                                     sizeBytes: data.count,
+                                     dataURL: dataUrl)
+            loaded.append(LocalAttachment(upload: upload, preview: data))
+            if loaded.count >= maxAttachments { break }
+        }
+        await MainActor.run {
+            attachments = loaded
+        }
+    }
+
     private func createThread() async {
         guard let client = env.client,
               let project = selectedProject,
               let provider = selectedProvider else { return }
 
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let uploads = attachments.map { $0.upload }
         let selection = project.defaultModelSelection?.instanceId == provider.instanceId
             && project.defaultModelSelection?.model == selectedModel
             ? project.defaultModelSelection!
@@ -386,11 +437,16 @@ struct NewThreadView: View {
             _ = try await client.createThreadAndStart(
                 project: project,
                 text: text,
+                attachments: uploads,
                 modelSelection: selection,
                 runtimeMode: runtimeMode,
                 interactionMode: interactionMode
             )
-            await MainActor.run { dismiss() }
+            await MainActor.run {
+                attachments = []
+                pickerItems = []
+                dismiss()
+            }
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription }
         }

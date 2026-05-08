@@ -117,19 +117,13 @@ struct ThreadsListView: View {
             customNavBar
                 .padding(.horizontal, T3Spacing.lg)
                 .padding(.top, T3Spacing.md)
-                .padding(.bottom, T3Spacing.md)
+                .padding(.bottom, T3Spacing.xs)
+
+            overviewHeader
+                .padding(.horizontal, T3Spacing.lg)
+                .padding(.bottom, T3Spacing.xs)
 
             List {
-                Section {
-                    overviewHeader
-                        .listRowInsets(EdgeInsets(top: T3Spacing.xs,
-                                                  leading: T3Spacing.lg,
-                                                  bottom: T3Spacing.md,
-                                                  trailing: T3Spacing.lg))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                }
-
                 if !filteredEmptyProjects.isEmpty {
                     Section {
                         ForEach(filteredEmptyProjects) { project in
@@ -188,6 +182,7 @@ struct ThreadsListView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .listSectionSpacing(T3Spacing.sm)
             .scrollContentBackground(.hidden)
             .background(T3Color.surfaceGrouped)
             .refreshable {

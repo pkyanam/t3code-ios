@@ -125,26 +125,21 @@ struct ComposerView: View {
 
     @ViewBuilder
     private var modelMenu: some View {
-        let providers = providersForCurrentInstance()
+        let sections = ModelCatalogSection.grouped(providers: env.serverConfig?.providers ?? [])
         Menu {
-            if providers.isEmpty {
+            if sections.isEmpty {
                 Text(modelName)
             } else {
-                ForEach(providers, id: \.instanceId) { provider in
-                    Section(provider.label) {
-                        ForEach(provider.models) { model in
-                            Button {
-                                Task { await selectModel(provider: provider, slug: model.slug) }
-                            } label: {
-                                if isCurrentModel(provider: provider, slug: model.slug) {
-                                    Label(model.label, systemImage: "checkmark")
-                                } else {
-                                    Text(model.label)
-                                }
-                            }
-                        }
+                ModelCatalogMenuSections(
+                    sections: sections,
+                    accentColor: accentColor,
+                    isSelected: { entry in
+                        isCurrentModel(provider: entry.provider, slug: entry.model.slug)
+                    },
+                    onSelect: { entry in
+                        Task { await selectModel(provider: entry.provider, slug: entry.model.slug) }
                     }
-                }
+                )
             }
         } label: {
             HStack(spacing: 5) {
@@ -164,11 +159,6 @@ struct ComposerView: View {
             .background(T3Color.surfaceMuted, in: Capsule())
             .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
         }
-    }
-
-    private func providersForCurrentInstance() -> [ServerProvider] {
-        guard let providers = env.serverConfig?.providers else { return [] }
-        return providers.filter(\.isUsable).sorted { $0.label < $1.label }
     }
 
     private func isCurrentModel(provider: ServerProvider, slug: String) -> Bool {
@@ -200,7 +190,9 @@ struct ComposerView: View {
     // MARK: - Helpers
 
     private var modelName: String {
-        store.detail?.modelSelection.model ?? "Claude Opus 4"
+        guard let detail = store.detail else { return "Model" }
+        return env.serverConfig?.modelDisplayLabel(selection: detail.modelSelection)
+            ?? detail.modelSelection.model
     }
 
     private var editorHeight: CGFloat {

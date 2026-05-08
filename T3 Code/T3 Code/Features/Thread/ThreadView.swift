@@ -96,7 +96,8 @@ struct ThreadView: View {
 
     private var resolvedThread: ThreadHeaderView.ThreadDescriptor {
         let title = store.detail?.title ?? threadShell.title
-        let model = store.detail?.modelSelection.model ?? threadShell.modelSelection.model
+        let selection = store.detail?.modelSelection ?? threadShell.modelSelection
+        let model = env.serverConfig?.modelDisplayLabel(selection: selection) ?? selection.model
         let interaction = store.detail?.interactionMode ?? threadShell.interactionMode
         let runtime = store.detail?.runtimeMode ?? threadShell.runtimeMode
         let updated = store.detail?.updatedAt ?? threadShell.updatedAt
@@ -268,21 +269,35 @@ struct ThreadHeaderView: View {
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: T3Spacing.sm) {
-            HStack(alignment: .firstTextBaseline, spacing: T3Spacing.sm) {
-                Text(thread.title)
-                    .font(T3Typography.headline)
-                    .foregroundStyle(T3Color.textPrimary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .layoutPriority(1)
+            Text(thread.title)
+                .font(T3Typography.headline)
+                .foregroundStyle(T3Color.textPrimary)
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
+            HStack(alignment: .center, spacing: T3Spacing.sm) {
                 if let project {
-                    T3Style.Pill(text: project.title)
+                    Text(project.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(T3Color.textSecondary)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(T3Color.surfaceElevated,
+                                    in: RoundedRectangle(cornerRadius: T3Radius.sm, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: T3Radius.sm, style: .continuous)
+                                .stroke(T3Color.separator, lineWidth: 0.5)
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Spacer(minLength: 0)
-
                 interactionModeMenu
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             HStack(spacing: T3Spacing.xs) {

@@ -10,6 +10,74 @@ struct ChatImageAttachment: Codable, Hashable, Sendable, Identifiable {
     let name: String
     let mimeType: String
     let sizeBytes: Int
+    /// Inline image as `data:image/...;base64,...` when the server echoes upload content.
+    let dataUrl: String?
+    /// Remote asset URL when the server stores images separately.
+    let url: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, type, name, mimeType, sizeBytes, dataUrl, dataURL, url
+    }
+
+    init(id: String,
+         type: String = "image",
+         name: String = "",
+         mimeType: String = "image/jpeg",
+         sizeBytes: Int = 0,
+         dataUrl: String? = nil,
+         url: String? = nil) {
+        self.id = id
+        self.type = type
+        self.name = name
+        self.mimeType = mimeType
+        self.sizeBytes = sizeBytes
+        self.dataUrl = dataUrl
+        self.url = url
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decodeIfPresent(String.self, forKey: .type) ?? "image"
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        mimeType = try c.decodeIfPresent(String.self, forKey: .mimeType) ?? "image/jpeg"
+        sizeBytes = try c.decodeIfPresent(Int.self, forKey: .sizeBytes) ?? 0
+        dataUrl = try c.decodeIfPresent(String.self, forKey: .dataUrl)
+            ?? c.decodeIfPresent(String.self, forKey: .dataURL)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(type, forKey: .type)
+        try c.encode(name, forKey: .name)
+        try c.encode(mimeType, forKey: .mimeType)
+        try c.encode(sizeBytes, forKey: .sizeBytes)
+        try c.encodeIfPresent(dataUrl, forKey: .dataUrl)
+        try c.encodeIfPresent(url, forKey: .url)
+    }
+}
+
+extension ChatImageAttachment {
+    /// Decodes attachment objects from JSON-RPC / WebSocket payloads (looser than `Codable` snapshots).
+    init?(dictionary: [String: Any]) {
+        let id = (dictionary["id"] as? String) ?? UUID().uuidString
+        let type = (dictionary["type"] as? String) ?? "image"
+        let name = (dictionary["name"] as? String) ?? ""
+        let mimeType = (dictionary["mimeType"] as? String) ?? "image/jpeg"
+        let sizeBytes: Int
+        if let i = dictionary["sizeBytes"] as? Int {
+            sizeBytes = i
+        } else if let n = dictionary["sizeBytes"] as? NSNumber {
+            sizeBytes = n.intValue
+        } else {
+            sizeBytes = 0
+        }
+        let dataUrl = (dictionary["dataUrl"] as? String) ?? (dictionary["dataURL"] as? String)
+        let url = dictionary["url"] as? String
+        self.init(id: id, type: type, name: name, mimeType: mimeType, sizeBytes: sizeBytes, dataUrl: dataUrl, url: url)
+    }
 }
 
 struct Message: Codable, Hashable, Sendable, Identifiable {
@@ -44,7 +112,7 @@ struct Message: Codable, Hashable, Sendable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(MessageID.self, forKey: .id)
         role = try c.decode(MessageRole.self, forKey: .role)
-        text = try c.decode(String.self, forKey: .text)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         attachments = try c.decodeIfPresent([ChatImageAttachment].self, forKey: .attachments)
         turnId = try c.decodeIfPresent(TurnID.self, forKey: .turnId)
         streaming = try c.decode(Bool.self, forKey: .streaming)

@@ -1,8 +1,10 @@
 import SwiftUI
+import UIKit
 
 struct MessageBubble: View {
     let role: MessageRole
     let text: String
+    let attachments: [ChatImageAttachment]?
     let isStreaming: Bool
     let timestamp: Date
     @AppStorage("transcriptDensity") private var transcriptDensityRaw: String = TranscriptDensity.comfortable.rawValue
@@ -14,13 +16,16 @@ struct MessageBubble: View {
                 roleHeader
             }
 
-            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                switch segment {
-                case .markdown(let chunk):
-                    markdownText(chunk)
-                case .code(let code, let language):
-                    CodeBlockView(code: code, language: language)
+            if let attachments, !attachments.isEmpty {
+                attachmentStrip(attachments)
+            }
+
+            if role == .user {
+                if !text.isEmpty {
+                    userPlainText
                 }
+            } else if !text.isEmpty {
+                MarkdownText(source: text, baseFont: textFont)
             }
 
             if isStreaming {
@@ -47,6 +52,17 @@ struct MessageBubble: View {
             RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous)
                 .stroke(T3Color.separator, lineWidth: 0.5)
         )
+    }
+
+    /// User messages render as plain text — they're authored by the human and
+    /// shouldn't accidentally be reformatted by markdown parsing.
+    private var userPlainText: some View {
+        Text(text)
+            .font(textFont)
+            .foregroundStyle(T3Color.textPrimary)
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Role header
@@ -80,82 +96,7 @@ struct MessageBubble: View {
         }
     }
 
-    // MARK: - Markdown rendering with inline code styling
-
-    @ViewBuilder
-    private func markdownText(_ source: String) -> some View {
-        if source.isEmpty {
-            EmptyView()
-        } else if let attributed = try? styledAttributedString(from: source) {
-            Text(attributed)
-                .font(textFont)
-                .foregroundStyle(T3Color.textPrimary)
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(source)
-                .font(textFont)
-                .foregroundStyle(T3Color.textPrimary)
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func styledAttributedString(from source: String) throws -> AttributedString {
-        var attributed = try AttributedString(
-            markdown: source,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )
-
-        // Tint inline code with a subtle background and monospaced font.
-        for run in attributed.runs {
-            guard let intent = run.inlinePresentationIntent,
-                  intent.contains(.code) else { continue }
-            attributed[run.range].backgroundColor = T3Color.surfaceMuted
-            attributed[run.range].foregroundColor = T3Color.textPrimary
-            attributed[run.range].font = .system(.footnote, design: .monospaced).weight(.medium)
-        }
-        return attributed
-    }
-
-    // MARK: - Segment parsing (block code awareness)
-
-    private enum Segment {
-        case markdown(String)
-        case code(String, language: String?)
-    }
-
-    private var segments: [Segment] {
-        guard text.contains("```") else {
-            return [.markdown(text)]
-        }
-        var result: [Segment] = []
-        let parts = text.components(separatedBy: "```")
-        for (index, part) in parts.enumerated() {
-            if index.isMultiple(of: 2) {
-                let trimmed = part
-                if !trimmed.isEmpty {
-                    result.append(.markdown(trimmed))
-                }
-            } else {
-                var lang: String? = nil
-                var body = part
-                if let nl = body.firstIndex(of: "\n") {
-                    let header = body[..<nl].trimmingCharacters(in: .whitespaces)
-                    if !header.isEmpty,
-                       header.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) {
-                        lang = header
-                        body = String(body[body.index(after: nl)...])
-                    }
-                }
-                let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-                result.append(.code(trimmed, language: lang))
-            }
-        }
-        return result
-    }
+    // MARK: - Layout helpers
 
     private var textFont: Font {
         if density == .compact {
@@ -175,6 +116,76 @@ struct MessageBubble: View {
     private var density: TranscriptDensity {
         TranscriptDensity(rawValue: transcriptDensityRaw) ?? .comfortable
     }
+
+    private func attachmentStrip(_ items: [ChatImageAttachment]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: T3Spacing.sm) {
+                ForEach(items) { att in
+                    ChatImageThumbnailView(attachment: att)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Chat image thumbnail
+
+private struct ChatImageThumbnailView: View {
+    let attachment: ChatImageAttachment
+
+    private let thumbWidth: CGFloat = 160
+    private let thumbHeight: CGFloat = 120
+
+    var body: some View {
+        Group {
+            if let urlStr = attachment.url, let url = URL(string: urlStr) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure:
+                        placeholder
+                    case .empty:
+                        ProgressView()
+                    @unknown default:
+                        placeholder
+                    }
+                }
+                .frame(width: thumbWidth, height: thumbHeight)
+                .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+            } else if let dataUrl = attachment.dataUrl,
+                      let data = Self.dataFromDataURL(dataUrl),
+                      let ui = UIImage(data: data) {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: thumbWidth, height: thumbHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+            } else {
+                placeholder
+            }
+        }
+    }
+
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: T3Radius.md)
+            .fill(T3Color.surfaceMuted)
+            .frame(width: thumbWidth, height: thumbHeight)
+            .overlay {
+                Image(systemName: "photo")
+                    .foregroundStyle(T3Color.textTertiary)
+            }
+    }
+
+    private static func dataFromDataURL(_ string: String) -> Data? {
+        if let range = string.range(of: ";base64,", range: string.startIndex..<string.endIndex) {
+            let b64 = String(string[range.upperBound...])
+            return Data(base64Encoded: b64)
+        }
+        return Data(base64Encoded: string)
+    }
 }
 
 // MARK: - Code block
@@ -183,15 +194,29 @@ struct CodeBlockView: View {
     let code: String
     let language: String?
 
+    private var isDiffLikeLanguage: Bool {
+        guard let language else { return false }
+        switch language.lowercased() {
+        case "diff", "patch", "udiff", "git":
+            return true
+        default:
+            return false
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            Text(code)
-                .font(.system(.footnote, design: .monospaced))
-                .foregroundStyle(T3Color.textPrimary)
-                .lineSpacing(3)
-                .multilineTextAlignment(.leading)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isDiffLikeLanguage {
+                DiffCodeLines(code: code)
+            } else {
+                Text(code)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(T3Color.textPrimary)
+                    .lineSpacing(3)
+                    .multilineTextAlignment(.leading)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, T3Spacing.md)
         .padding(.vertical, T3Spacing.sm)
@@ -213,6 +238,54 @@ struct CodeBlockView: View {
                     .padding(.trailing, T3Spacing.sm)
                     .padding(.top, T3Spacing.sm)
             }
+        }
+    }
+}
+
+// MARK: - Diff / patch highlighting
+
+private struct DiffCodeLines: View {
+    let code: String
+
+    private var lines: [String] {
+        code.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map(String.init)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(foreground(for: line))
+                    .multilineTextAlignment(.leading)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func foreground(for line: String) -> Color {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("+++ ") || t.hasPrefix("--- ") {
+            return T3Color.textSecondary
+        }
+        if t.hasPrefix("diff --git") || t.hasPrefix("Index: ") {
+            return T3Color.textSecondary
+        }
+        if t.hasPrefix("@@") {
+            return T3Color.warning
+        }
+        guard let c = line.first else { return T3Color.textPrimary }
+        switch c {
+        case "+":
+            return T3Color.success
+        case "-":
+            return T3Color.danger
+        case " ":
+            return T3Color.textPrimary
+        default:
+            return T3Color.textPrimary
         }
     }
 }

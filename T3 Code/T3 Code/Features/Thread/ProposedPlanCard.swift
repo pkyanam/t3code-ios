@@ -52,19 +52,14 @@ struct ProposedPlanCard: View {
 
     @ViewBuilder
     private var planBody: some View {
-        let attributed = (try? AttributedString(markdown: plan.planMarkdown)) ?? AttributedString(plan.planMarkdown)
         let visibleHeight: CGFloat? = isExpanded ? nil : 200
-        Text(attributed)
-            .font(T3Typography.callout)
-            .foregroundStyle(T3Color.textPrimary)
-            .lineSpacing(3)
+        MarkdownText(source: plan.planMarkdown, baseFont: T3Typography.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(maxHeight: visibleHeight, alignment: .top)
             .clipped()
             .padding(T3Spacing.md)
             .background(T3Color.surfaceMuted)
             .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
-            .textSelection(.enabled)
     }
 
     private var actionRow: some View {

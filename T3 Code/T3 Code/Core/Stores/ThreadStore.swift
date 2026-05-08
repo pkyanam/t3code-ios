@@ -247,27 +247,56 @@ final class ThreadStore {
 
     @MainActor
     private func applyMessageSent(_ event: ThreadEvent) {
-        guard let messageIdRaw = event.payload["messageId"] as? String,
-              let roleRaw = event.payload["role"] as? String,
-              let role = MessageRole(rawValue: roleRaw),
-              let text = event.payload["text"] as? String else { return }
-        let createdAt = (event.payload["createdAt"] as? String).flatMap(ISO8601Decoder.parse) ?? Date()
-        let updatedAt = (event.payload["updatedAt"] as? String).flatMap(ISO8601Decoder.parse) ?? createdAt
-        let streaming = (event.payload["streaming"] as? Bool) ?? false
-        let turnId = (event.payload["turnId"] as? String).map { TurnID(rawValue: $0) }
+        let fields = mergedThreadMessageFields(event)
+        guard let messageIdRaw = (fields["messageId"] as? String) ?? (fields["id"] as? String),
+              let roleRaw = fields["role"] as? String,
+              let role = MessageRole(rawValue: roleRaw) else { return }
+        let payloadText = (fields["text"] as? String) ?? ""
+        let createdAt = (fields["createdAt"] as? String).flatMap(ISO8601Decoder.parse) ?? Date()
+        let updatedAt = (fields["updatedAt"] as? String).flatMap(ISO8601Decoder.parse) ?? createdAt
+        let streaming = (fields["streaming"] as? Bool) ?? false
+        let turnId = (fields["turnId"] as? String).map { TurnID(rawValue: $0) }
         let id = MessageID(rawValue: messageIdRaw)
+        let attachments = attachmentsFromMessagePayload(fields)
+
+        // Mirror the desktop store semantics: when an existing message
+        // receives a streaming event, the payload's text field is the new
+        // delta to append. The completion event arrives with streaming=false
+        // and text="" — keep the existing accumulated text in that case.
         if let i = messages.firstIndex(where: { $0.id == id }) {
-            messages[i].text = text
+            if streaming {
+                messages[i].text += payloadText
+            } else if !payloadText.isEmpty {
+                messages[i].text = payloadText
+            }
             messages[i].streaming = streaming
             messages[i].updatedAt = updatedAt
+            if let attachments, !attachments.isEmpty {
+                messages[i].attachments = attachments
+            }
         } else {
-            let msg = Message(id: id, role: role, text: text,
-                              attachments: nil, turnId: turnId,
+            let msg = Message(id: id, role: role, text: payloadText,
+                              attachments: attachments, turnId: turnId,
                               streaming: streaming, createdAt: createdAt,
                               updatedAt: updatedAt)
             messages.append(msg)
             messages.sort { $0.createdAt < $1.createdAt }
         }
+    }
+
+    /// Merges top-level event payload with nested `message` object when present.
+    private func mergedThreadMessageFields(_ event: ThreadEvent) -> [String: Any] {
+        var m = event.payload
+        if let inner = event.payload["message"] as? [String: Any] {
+            for (k, v) in inner { m[k] = v }
+        }
+        return m
+    }
+
+    private func attachmentsFromMessagePayload(_ fields: [String: Any]) -> [ChatImageAttachment]? {
+        guard let raw = fields["attachments"] as? [[String: Any]], !raw.isEmpty else { return nil }
+        let parsed = raw.compactMap { ChatImageAttachment(dictionary: $0) }
+        return parsed.isEmpty ? nil : parsed
     }
 
     @MainActor

@@ -401,7 +401,7 @@ struct SettingsView: View {
                     .font(T3Typography.body)
                     .foregroundStyle(T3Color.textPrimary)
                     .lineLimit(1)
-                Text(p.driver)
+                Text(p.brandDisplayName)
                     .font(T3Typography.footnote)
                     .foregroundStyle(T3Color.textTertiary)
                     .lineLimit(1)

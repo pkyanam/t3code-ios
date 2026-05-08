@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ThreadRow: View {
     let thread: ThreadShell
+    @Environment(AppEnvironment.self) private var env
 
     var body: some View {
         HStack(alignment: .center, spacing: T3Spacing.md) {
@@ -15,9 +16,10 @@ struct ThreadRow: View {
                     .foregroundStyle(T3Color.textPrimary)
                     .lineLimit(1)
                 HStack(spacing: T3Spacing.xs) {
-                    Text(thread.modelSelection.model)
+                    Text(modelSubtitleLine)
                         .font(T3Typography.footnote)
                         .foregroundStyle(T3Color.textSecondary)
+                        .lineLimit(1)
                     if let branch = thread.branch {
                         Text("·")
                             .font(T3Typography.footnote)
@@ -82,6 +84,25 @@ struct ThreadRow: View {
         case .completed: "checkmark.circle"
         case .none: "bubble.left"
         }
+    }
+
+    private var modelSubtitleLine: String {
+        let label = env.serverConfig?.modelDisplayLabel(selection: thread.modelSelection)
+            ?? thread.modelSelection.model
+        guard let provider = env.serverConfig?.providers.first(where: { $0.instanceId == thread.modelSelection.instanceId }) else {
+            return label
+        }
+        let brand = provider.brandDisplayName
+        var parts: [String] = [label, brand]
+        if let upstream = provider.upstreamVendorLabel(forModelSlug: thread.modelSelection.model) {
+            parts.append(upstream)
+        }
+        let instance = provider.label
+        if instance.caseInsensitiveCompare(brand) != .orderedSame,
+           instance.caseInsensitiveCompare(label) != .orderedSame {
+            parts.append(instance)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var relativeDate: String {
