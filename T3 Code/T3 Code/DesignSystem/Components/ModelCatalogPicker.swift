@@ -47,18 +47,17 @@ struct ModelCatalogMenuSections: View {
 
     @ViewBuilder
     private func opencodeCaptions(_ entry: ModelCatalogEntry) -> some View {
+        if let sp = entry.model.subProvider, !sp.isEmpty {
+            Text(sp)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(T3Color.textSecondary)
+                .lineLimit(2)
+        }
         if let upstream = entry.provider.upstreamVendorLabel(forModelSlug: entry.model.slug) {
             Text(upstream)
                 .font(.caption)
                 .foregroundStyle(T3Color.textTertiary)
                 .lineLimit(1)
-        }
-        if let badge = entry.opencodeOfferBadge,
-           badge.caseInsensitiveCompare(entry.opencodeBucket?.sectionSuffix ?? "") != .orderedSame {
-            Text(badge)
-                .font(.caption)
-                .foregroundStyle(T3Color.textTertiary)
-                .lineLimit(2)
         }
         Text(entry.model.slug)
             .font(.caption2)

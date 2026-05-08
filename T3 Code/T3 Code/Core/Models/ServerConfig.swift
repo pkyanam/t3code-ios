@@ -38,6 +38,8 @@ struct ServerProviderModel: Decodable, Hashable, Identifiable, Sendable {
     let slug: String
     let name: String
     let shortName: String?
+    /// OpenCode: upstream catalog name (Zen, Go, GitHub Copilot, …) — matches desktop `ServerProviderModel.subProvider`.
+    let subProvider: String?
     let isCustom: Bool
     /// When the desktop server sends tier/catalog hints (Zen vs Go, etc.).
     let tier: String?
@@ -50,7 +52,7 @@ struct ServerProviderModel: Decodable, Hashable, Identifiable, Sendable {
     var label: String { shortName ?? name }
 
     enum CodingKeys: String, CodingKey {
-        case slug, name, shortName, isCustom
+        case slug, name, shortName, subProvider, isCustom
         case tier, catalog, bundle
         case subscription, routing, channel, offer
         case eligible, available, enabled
@@ -61,6 +63,13 @@ struct ServerProviderModel: Decodable, Hashable, Identifiable, Sendable {
         slug = try c.decode(String.self, forKey: .slug)
         name = try c.decode(String.self, forKey: .name)
         shortName = try c.decodeIfPresent(String.self, forKey: .shortName)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .subProvider)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            subProvider = raw
+        } else {
+            subProvider = nil
+        }
         isCustom = try c.decodeIfPresent(Bool.self, forKey: .isCustom) ?? false
 
         tier = try Self.decodeFirstString(c, keys: [.tier, .subscription, .routing, .channel, .offer])
@@ -96,8 +105,8 @@ enum OpenCodeRoutingBucket: String, Hashable, Sendable {
     case standard
     case other
 
-    static func fromMetadata(tier: String?, catalog: String?, bundle: String?) -> OpenCodeRoutingBucket? {
-        let bits = [tier, catalog, bundle].compactMap { $0?.lowercased() }
+    static func fromMetadata(tier: String?, catalog: String?, bundle: String?, subProvider: String? = nil) -> OpenCodeRoutingBucket? {
+        let bits = [tier, catalog, bundle, subProvider].compactMap { $0?.lowercased() }
         for raw in bits {
             if raw.contains("zen") { return .zen }
         }
@@ -139,7 +148,7 @@ enum OpenCodeRoutingBucket: String, Hashable, Sendable {
 
 extension ServerProviderModel {
     func opencodeRoutingBucket() -> OpenCodeRoutingBucket {
-        if let fromMeta = OpenCodeRoutingBucket.fromMetadata(tier: tier, catalog: catalog, bundle: bundle) {
+        if let fromMeta = OpenCodeRoutingBucket.fromMetadata(tier: tier, catalog: catalog, bundle: bundle, subProvider: subProvider) {
             return fromMeta
         }
         if let fromSlug = OpenCodeRoutingBucket.fromSlugPrefix(slug) {
@@ -257,6 +266,7 @@ struct ModelCatalogEntry: Identifiable, Hashable, Sendable {
     /// Short badge when metadata names the offer (server may send tier/catalog beyond slug parsing).
     var opencodeOfferBadge: String? {
         guard provider.driver == "opencode" else { return nil }
+        if let sp = model.subProvider, !sp.isEmpty { return sp }
         let meta = [model.tier, model.catalog, model.bundle].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return meta.first
     }
@@ -285,7 +295,9 @@ struct ModelCatalogEntry: Identifiable, Hashable, Sendable {
     var pickerSubtitle: String {
         let brand = provider.brandDisplayName
         var parts: [String] = [brand]
-        if provider.driver == "opencode", let b = opencodeBucket {
+        if provider.driver == "opencode", let sp = model.subProvider, !sp.isEmpty {
+            parts.append(sp)
+        } else if provider.driver == "opencode", let b = opencodeBucket {
             parts.append(b.sectionSuffix)
         }
         if let upstream = provider.upstreamVendorLabel(forModelSlug: model.slug) {
@@ -352,25 +364,60 @@ struct ModelCatalogSection: Identifiable, Sendable {
                 continue
             }
 
-            let buckets = Dictionary(grouping: rawEntries) { $0.model.opencodeRoutingBucket() }
-            let orderedBuckets = OpenCodeRoutingBucket.allCasesInOrder.filter { buckets[$0] != nil }
-
-            let shouldShowSuffix = !(orderedBuckets.count == 1 && orderedBuckets.first == .standard)
-
-            for bucket in orderedBuckets {
-                guard var items = buckets[bucket] else { continue }
-                items.sort {
-                    $0.model.label.localizedCaseInsensitiveCompare($1.model.label) == .orderedAscending
+            // Desktop sends `subProvider` per model (OpenCode inventory provider name — Zen, Go, Copilot, …).
+            let subProviderKeys = Set(
+                rawEntries.compactMap { $0.model.subProvider?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+            if !subProviderKeys.isEmpty {
+                let groups = Dictionary(grouping: rawEntries) { entry -> String in
+                    let s = entry.model.subProvider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return s.isEmpty ? "__none__" : s
                 }
-                let suffix: String? = shouldShowSuffix ? bucket.sectionSuffix : nil
+                let orderedKeys = groups.keys.sorted { a, b in
+                    if a == "__none__" { return false }
+                    if b == "__none__" { return true }
+                    return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+                }
+                let nonEmptyKeys = orderedKeys.filter { $0 != "__none__" }
+                let shouldShowSuffix = nonEmptyKeys.count > 1 || (orderedKeys.contains("__none__") && !nonEmptyKeys.isEmpty)
 
-                let sid = "\(p.instanceId.rawValue)|\(bucket.rawValue)"
-                sections.append(ModelCatalogSection(
-                    sectionId: sid,
-                    provider: p,
-                    entries: items,
-                    headerSuffix: suffix
-                ))
+                for key in orderedKeys {
+                    guard var items = groups[key] else { continue }
+                    items.sort {
+                        $0.model.label.localizedCaseInsensitiveCompare($1.model.label) == .orderedAscending
+                    }
+                    let label = key == "__none__" ? "Other" : key
+                    let suffix: String? = shouldShowSuffix ? label : nil
+                    let sid = "\(p.instanceId.rawValue)|\(key)"
+                    sections.append(ModelCatalogSection(
+                        sectionId: sid,
+                        provider: p,
+                        entries: items,
+                        headerSuffix: suffix
+                    ))
+                }
+            } else {
+                let buckets = Dictionary(grouping: rawEntries) { $0.model.opencodeRoutingBucket() }
+                let orderedBuckets = OpenCodeRoutingBucket.allCasesInOrder.filter { buckets[$0] != nil }
+
+                let shouldShowSuffix = !(orderedBuckets.count == 1 && orderedBuckets.first == .standard)
+
+                for bucket in orderedBuckets {
+                    guard var items = buckets[bucket] else { continue }
+                    items.sort {
+                        $0.model.label.localizedCaseInsensitiveCompare($1.model.label) == .orderedAscending
+                    }
+                    let suffix: String? = shouldShowSuffix ? bucket.sectionSuffix : nil
+
+                    let sid = "\(p.instanceId.rawValue)|\(bucket.rawValue)"
+                    sections.append(ModelCatalogSection(
+                        sectionId: sid,
+                        provider: p,
+                        entries: items,
+                        headerSuffix: suffix
+                    ))
+                }
             }
         }
 
