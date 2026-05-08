@@ -19,84 +19,107 @@ struct ComposerView: View {
                 attachmentRow
             }
 
-            HStack(spacing: T3Spacing.md) {
-                // Model selector
-                Button {
-                    // Model picker action
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "sparkle")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(modelName)
-                            .font(.system(size: 13, weight: .medium))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                    }
-                    .foregroundStyle(T3Color.textSecondary)
-                }
-
-                // Text input
-                ZStack(alignment: .topLeading) {
-                    if draft.isEmpty {
-                        Text("Ask anything, @tag files/folders, or use / to show available commands")
-                            .foregroundStyle(T3Color.textTertiary)
-                            .font(T3Typography.callout)
-                            .padding(.top, 8)
-                            .padding(.leading, 5)
-                    }
-                    TextEditor(text: $draft)
-                        .focused($focused)
-                        .frame(height: editorHeight)
-                        .scrollContentBackground(.hidden)
-                        .padding(.horizontal, 0)
-                        .padding(.vertical, 0)
-                        .font(T3Typography.callout)
-                }
-
-                // Photos button
-                PhotosPicker(selection: $pickerItems,
-                             maxSelectionCount: maxAttachments,
-                             matching: .images) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(attachments.count >= maxAttachments ? T3Color.textTertiary : T3Color.textSecondary)
-                        .frame(width: 32, height: 32)
-                }
-                .disabled(attachments.count >= maxAttachments)
-
-                // Send button
-                Button(action: send) {
-                    Image(systemName: store.isSending ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                        .background(canSend ? Color.blue : T3Color.surfaceMuted)
-                        .clipShape(Circle())
-                }
-                .disabled(!canSend || store.isSending)
+            VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                textField
+                controlRow
             }
             .padding(.horizontal, T3Spacing.md)
-            .padding(.vertical, T3Spacing.sm)
+            .padding(.top, T3Spacing.md)
+            .padding(.bottom, T3Spacing.sm)
             .background(T3Color.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: T3Radius.xl, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous)
-                    .stroke(focused ? accentColor.opacity(0.75) : T3Color.separator, lineWidth: focused ? 1 : 0.5)
+                RoundedRectangle(cornerRadius: T3Radius.xl, style: .continuous)
+                    .stroke(focused ? accentColor.opacity(0.55) : T3Color.separator,
+                            lineWidth: focused ? 1 : 0.5)
             )
         }
         .padding(.horizontal, T3Spacing.lg)
-        .padding(.top, T3Spacing.md)
+        .padding(.top, T3Spacing.sm)
         .padding(.bottom, T3Spacing.sm)
         .background(T3Color.surfaceGrouped)
-        .overlay(alignment: .top) { Divider().opacity(0.35) }
         .onChange(of: pickerItems) { _, items in
             Task { await loadAttachments(items) }
         }
     }
 
-    private var modelName: String {
-        store.detail?.modelSelection.model ?? "Claude Opus 4"
+    // MARK: - Text field
+
+    private var textField: some View {
+        ZStack(alignment: .topLeading) {
+            if draft.isEmpty {
+                Text("Ask anything, @tag files/folders,\nor use / to show available commands")
+                    .foregroundStyle(T3Color.textTertiary)
+                    .font(T3Typography.callout)
+                    .padding(.top, 8)
+                    .padding(.leading, 5)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $draft)
+                .focused($focused)
+                .frame(height: editorHeight)
+                .scrollContentBackground(.hidden)
+                .font(T3Typography.callout)
+                .foregroundStyle(T3Color.textPrimary)
+                .tint(accentColor)
+        }
     }
+
+    // MARK: - Bottom control row
+
+    private var controlRow: some View {
+        HStack(spacing: T3Spacing.sm) {
+            // Model selector
+            Menu {
+                Text(modelName)
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(accentColor)
+                    Text(modelName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(T3Color.textPrimary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(T3Color.textTertiary)
+                }
+                .padding(.horizontal, T3Spacing.sm)
+                .padding(.vertical, 6)
+                .background(T3Color.surfaceMuted, in: Capsule())
+                .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+            }
+
+            Spacer(minLength: 0)
+
+            // Photos / attachments
+            PhotosPicker(selection: $pickerItems,
+                         maxSelectionCount: maxAttachments,
+                         matching: .images) {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(attachments.count >= maxAttachments
+                                     ? T3Color.textTertiary
+                                     : T3Color.textSecondary)
+                    .frame(width: 32, height: 32)
+            }
+            .disabled(attachments.count >= maxAttachments)
+
+            // Send / stop
+            Button(action: send) {
+                Image(systemName: store.isSending ? "stop.fill" : "arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(canSend ? accentColor : T3Color.surfaceMuted)
+                    .clipShape(Circle())
+            }
+            .disabled(!canSend)
+        }
+    }
+
+    // MARK: - Attachments
 
     private var attachmentRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -108,15 +131,20 @@ struct ComposerView: View {
                 }
             }
             .padding(.horizontal, T3Spacing.md)
-            .padding(.vertical, T3Spacing.sm)
         }
+    }
+
+    // MARK: - Helpers
+
+    private var modelName: String {
+        store.detail?.modelSelection.model ?? "Claude Opus 4"
     }
 
     private var editorHeight: CGFloat {
         let lines = max(1, draft.components(separatedBy: .newlines).count)
         let textExtra = min(4, draft.count / 42)
-        let visibleLines = min(composerSize.maxLines, max(1, lines + textExtra))
-        return CGFloat(visibleLines) * 22 + 18
+        let visibleLines = min(composerSize.maxLines, max(2, lines + textExtra))
+        return CGFloat(visibleLines) * 22 + 12
     }
 
     private var composerSize: ComposerSize {

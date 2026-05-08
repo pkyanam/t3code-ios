@@ -1,10 +1,14 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
     var isModal: Bool = true
     @State private var confirmSignOut: Bool = false
+    @State private var didCopyURL: Bool = false
+    @State private var isRefreshingConfig: Bool = false
+
     @AppStorage("appearance") private var appearanceRaw: String = AppAppearance.system.rawValue
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
     @AppStorage("transcriptDensity") private var transcriptDensityRaw: String = TranscriptDensity.comfortable.rawValue
@@ -12,30 +16,51 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: T3Spacing.xl) {
-                    customizationSection
-                    serverSection
-                    connectionSection
-                    aboutSection
-                }
-                .padding(T3Spacing.lg)
-                .frame(maxWidth: 560, alignment: .leading)
-                .frame(maxWidth: .infinity)
-            }
-            .background(T3Color.surfaceGrouped)
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if isModal {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { dismiss() }
+            ZStack {
+                T3Color.surfaceGrouped.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    headerBar
+                        .padding(.horizontal, T3Spacing.lg)
+                        .padding(.top, T3Spacing.md)
+                        .padding(.bottom, T3Spacing.lg)
+
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: T3Spacing.xl) {
+                            connectionSection
+                            appearanceSection
+                            chatSection
+                            serverSection
+                            providersSection
+                            aboutSection
+                            signOutSection
+                        }
+                        .padding(.horizontal, T3Spacing.lg)
+                        .padding(.bottom, T3Spacing.xxxl)
                     }
+                    .scrollIndicators(.hidden)
                 }
             }
-            .confirmationDialog("Sign out of this server?",
-                                isPresented: $confirmSignOut,
-                                titleVisibility: .visible) {
+            .navigationBarHidden(true)
+            .overlay(alignment: .top) {
+                if didCopyURL {
+                    Text("URL copied")
+                        .font(T3Typography.caption)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, T3Spacing.md)
+                        .padding(.vertical, T3Spacing.sm)
+                        .background(T3Color.surfaceElevated, in: Capsule())
+                        .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+                        .padding(.top, T3Spacing.sm)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: didCopyURL)
+            .confirmationDialog(
+                "Sign out of this server?",
+                isPresented: $confirmSignOut,
+                titleVisibility: .visible
+            ) {
                 Button("Sign out", role: .destructive) {
                     Task {
                         await env.signOut()
@@ -44,182 +69,404 @@ struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Your bearer token will be removed from this device. You'll need to pair again with the desktop app.")
+                Text("Your bearer token will be removed from this device. Pair again from the desktop app to reconnect.")
             }
         }
     }
 
-    private var customizationSection: some View {
-        SettingsSection(title: "Customize") {
-            VStack(spacing: 0) {
-                SettingsPickerRow(title: "Appearance", selection: $appearanceRaw) {
-                    ForEach(AppAppearance.allCases) { appearance in
-                        Text(appearance.label).tag(appearance.rawValue)
-                    }
-                }
-                Divider()
-                SettingsPickerRow(title: "Accent", selection: $accentRaw) {
-                    ForEach(AppAccent.allCases) { accent in
-                        Label {
-                            Text(accent.label)
-                        } icon: {
-                            Circle()
-                                .fill(accent.color)
-                                .frame(width: 12, height: 12)
-                        }
-                        .tag(accent.rawValue)
-                    }
-                }
-                Divider()
-                SettingsPickerRow(title: "Transcript", selection: $transcriptDensityRaw) {
-                    ForEach(TranscriptDensity.allCases) { density in
-                        Text(density.label).tag(density.rawValue)
-                    }
-                }
-                Divider()
-                SettingsPickerRow(title: "Composer", selection: $composerSizeRaw) {
-                    ForEach(ComposerSize.allCases) { size in
-                        Text(size.label).tag(size.rawValue)
-                    }
+    // MARK: - Header bar (matches ThreadsListView)
+
+    private var headerBar: some View {
+        HStack(spacing: T3Spacing.sm) {
+            T3WordmarkLabel()
+            Spacer()
+            ConnectionPill(state: env.connectionStatus)
+            if isModal {
+                T3Style.ToolbarChip(action: { dismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(T3Color.textPrimary)
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private var serverSection: some View {
-        SettingsSection(title: "Server") {
-            SettingsRow(title: "URL") {
-                if case .configured(let url) = env.sessionState {
-                    Text(url.absoluteString)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                } else {
-                    Text("-")
-                }
-            }
-        }
-    }
+    // MARK: - Connection
 
     private var connectionSection: some View {
-        SettingsSection(title: "Connection") {
-            SettingsRow(title: "Status") {
-                ConnectionPill(state: env.connectionStatus)
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Connection")
+            T3Style.Card {
+                VStack(alignment: .leading, spacing: T3Spacing.md) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: T3Spacing.xs) {
+                            Text(connectionHeadline)
+                                .font(T3Typography.title)
+                                .foregroundStyle(T3Color.textPrimary)
+                            if case .configured(let url) = env.sessionState {
+                                Text(url.host ?? url.absoluteString)
+                                    .font(T3Typography.callout)
+                                    .foregroundStyle(T3Color.textSecondary)
+                                    .lineLimit(1)
+                            } else {
+                                Text("Not paired with a server")
+                                    .font(T3Typography.callout)
+                                    .foregroundStyle(T3Color.textSecondary)
+                            }
+                        }
+                        Spacer(minLength: T3Spacing.md)
+                        ConnectionPill(state: env.connectionStatus)
+                    }
+
+                    if let detail = env.connectionStatus.detail {
+                        Text(detail)
+                            .font(T3Typography.footnote)
+                            .foregroundStyle(T3Color.danger)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
-            if let detail = env.connectionStatus.detail {
-                Divider()
-                Text(detail)
-                    .font(T3Typography.footnote)
-                    .foregroundStyle(T3Color.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, T3Spacing.sm)
-            }
-            Divider()
-            Button(role: .destructive) {
-                confirmSignOut = true
-            } label: {
-                Text("Sign out")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .font(T3Typography.body)
-            .foregroundStyle(T3Color.danger)
         }
     }
 
-    private var aboutSection: some View {
-        SettingsSection(title: "About") {
-            SettingsRow(title: "Version") {
-                Text(appVersion)
-            }
-            Divider()
-            Link(destination: URL(string: "https://t3.codes")!) {
-                SettingsRowLabel(title: "T3 Code on the web", accessory: "arrow.up.right")
-            }
-            .buttonStyle(.plain)
+    private var connectionHeadline: String {
+        switch env.connectionStatus {
+        case .connected: "Live"
+        case .connecting: "Connecting…"
+        case .offline: "Offline"
+        case .error: "Needs attention"
         }
+    }
+
+    // MARK: - Appearance
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Look & feel")
+            T3Style.Card {
+                VStack(alignment: .leading, spacing: T3Spacing.lg) {
+                    VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                        Text("Appearance")
+                            .font(T3Typography.callout)
+                            .foregroundStyle(T3Color.textSecondary)
+                        Picker("Appearance", selection: $appearanceRaw) {
+                            ForEach(AppAppearance.allCases) { a in
+                                Text(a.label).tag(a.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    Divider().overlay(T3Color.separator)
+
+                    VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                        Text("Accent")
+                            .font(T3Typography.callout)
+                            .foregroundStyle(T3Color.textSecondary)
+                        HStack(spacing: T3Spacing.md) {
+                            ForEach(AppAccent.allCases) { accent in
+                                accentSwatch(accent)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func accentSwatch(_ accent: AppAccent) -> some View {
+        let selected = accentRaw == accent.rawValue
+        return Button {
+            accentRaw = accent.rawValue
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(accent.color)
+                    .frame(width: 32, height: 32)
+                if selected {
+                    Circle()
+                        .stroke(T3Color.textPrimary.opacity(0.95), lineWidth: 2)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accent.label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    // MARK: - Chat experience
+
+    private var chatSection: some View {
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Chat experience")
+            T3Style.Card(padding: T3Spacing.md) {
+                VStack(spacing: 0) {
+                    settingsMenuRow(
+                        title: "Transcript density",
+                        value: (TranscriptDensity(rawValue: transcriptDensityRaw) ?? .comfortable).label
+                    ) {
+                        ForEach(TranscriptDensity.allCases) { d in
+                            Button(d.label) { transcriptDensityRaw = d.rawValue }
+                        }
+                    }
+                    Divider().overlay(T3Color.separator)
+                    settingsMenuRow(
+                        title: "Composer height",
+                        value: (ComposerSize(rawValue: composerSizeRaw) ?? .comfortable).label
+                    ) {
+                        ForEach(ComposerSize.allCases) { s in
+                            Button(s.label) { composerSizeRaw = s.rawValue }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Server
+
+    private var serverSection: some View {
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Server")
+            T3Style.Card {
+                VStack(alignment: .leading, spacing: T3Spacing.lg) {
+                    if case .configured(let url) = env.sessionState {
+                        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                            Text("Endpoint")
+                                .font(T3Typography.callout)
+                                .foregroundStyle(T3Color.textSecondary)
+                            Text(url.absoluteString)
+                                .font(T3Typography.code)
+                                .foregroundStyle(T3Color.textPrimary)
+                                .padding(.horizontal, T3Spacing.sm)
+                                .padding(.vertical, T3Spacing.sm)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(T3Color.surfaceMuted)
+                                .clipShape(RoundedRectangle(cornerRadius: T3Radius.sm, style: .continuous))
+                                .textSelection(.enabled)
+                                .lineLimit(3)
+                        }
+
+                        HStack(spacing: T3Spacing.sm) {
+                            Button {
+                                UIPasteboard.general.string = url.absoluteString
+                                didCopyURL = true
+                                Task {
+                                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                                    didCopyURL = false
+                                }
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                                    .font(T3Typography.bodyEmphasis)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button {
+                                Task {
+                                    isRefreshingConfig = true
+                                    await env.refreshServerConfig()
+                                    isRefreshingConfig = false
+                                }
+                            } label: {
+                                Group {
+                                    if isRefreshingConfig {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Label("Refresh", systemImage: "arrow.clockwise")
+                                    }
+                                }
+                                .font(T3Typography.bodyEmphasis)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(AppAccent.color(for: accentRaw))
+                            .disabled(isRefreshingConfig)
+                        }
+                    } else {
+                        Text("Not connected")
+                            .font(T3Typography.body)
+                            .foregroundStyle(T3Color.textSecondary)
+                    }
+
+                    if let err = env.serverConfigError {
+                        Divider().overlay(T3Color.separator)
+                        Text(err)
+                            .font(T3Typography.footnote)
+                            .foregroundStyle(T3Color.danger)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Providers
+
+    @ViewBuilder
+    private var providersSection: some View {
+        if let config = env.serverConfig, !config.providers.isEmpty {
+            VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                T3Style.SectionHeader(title: "Model providers")
+                T3Style.Card(padding: T3Spacing.md) {
+                    VStack(spacing: 0) {
+                        let shown = Array(config.providers.prefix(8))
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, p in
+                            providerRow(p)
+                            if index < shown.count - 1 {
+                                Divider().overlay(T3Color.separator)
+                            }
+                        }
+                    }
+                }
+                Text("Configured on your desktop server.")
+                    .font(T3Typography.footnote)
+                    .foregroundStyle(T3Color.textTertiary)
+                    .padding(.horizontal, T3Spacing.xs)
+            }
+        }
+    }
+
+    private func providerRow(_ p: ServerProvider) -> some View {
+        HStack(alignment: .center, spacing: T3Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.label)
+                    .font(T3Typography.body)
+                    .foregroundStyle(T3Color.textPrimary)
+                    .lineLimit(1)
+                Text(p.driver)
+                    .font(T3Typography.footnote)
+                    .foregroundStyle(T3Color.textTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: T3Spacing.sm)
+            T3Style.Pill(text: providerStatusLabel(p),
+                         tint: providerStatusTint(p),
+                         emphasized: true)
+        }
+        .padding(.vertical, T3Spacing.sm)
+    }
+
+    private func providerStatusLabel(_ p: ServerProvider) -> String {
+        if p.isUsable { return "Ready" }
+        if !p.installed { return "Missing" }
+        if !p.enabled { return "Off" }
+        return p.auth.status
+    }
+
+    private func providerStatusTint(_ p: ServerProvider) -> Color {
+        if p.isUsable { return T3Color.success }
+        if !p.enabled || !p.installed { return T3Color.textTertiary }
+        return T3Color.warning
+    }
+
+    // MARK: - About
+
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "About")
+            T3Style.Card(padding: T3Spacing.md) {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Version")
+                            .font(T3Typography.body)
+                            .foregroundStyle(T3Color.textPrimary)
+                        Spacer()
+                        Text(appVersion)
+                            .font(T3Typography.callout)
+                            .foregroundStyle(T3Color.textSecondary)
+                            .monospacedDigit()
+                    }
+                    .frame(minHeight: 44)
+
+                    Divider().overlay(T3Color.separator)
+
+                    Link(destination: URL(string: "https://t3.codes")!) {
+                        HStack {
+                            Text("T3 Code on the web")
+                                .font(T3Typography.body)
+                                .foregroundStyle(T3Color.textPrimary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(T3Color.textTertiary)
+                        }
+                        .frame(minHeight: 44)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Sign out
+
+    private var signOutSection: some View {
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Account")
+            T3Style.Card {
+                VStack(alignment: .leading, spacing: T3Spacing.md) {
+                    Text("Signing out clears the saved server URL and token from this iPhone.")
+                        .font(T3Typography.footnote)
+                        .foregroundStyle(T3Color.textSecondary)
+                    Button(role: .destructive) {
+                        confirmSignOut = true
+                    } label: {
+                        Text("Sign out")
+                            .font(T3Typography.bodyEmphasis)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(T3Color.danger)
+                }
+            }
+        }
+    }
+
+    // MARK: - Primitives
+
+    private func settingsMenuRow<MenuContent: View>(
+        title: String,
+        value: String,
+        @ViewBuilder menu: () -> MenuContent
+    ) -> some View {
+        HStack {
+            Text(title)
+                .font(T3Typography.body)
+                .foregroundStyle(T3Color.textPrimary)
+            Spacer()
+            Menu {
+                menu()
+            } label: {
+                HStack(spacing: T3Spacing.xs) {
+                    Text(value)
+                        .font(T3Typography.callout)
+                        .foregroundStyle(T3Color.textPrimary)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(T3Color.textTertiary)
+                }
+                .padding(.horizontal, T3Spacing.md)
+                .padding(.vertical, 6)
+                .background(T3Color.surfaceMuted, in: Capsule())
+                .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+            }
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, T3Spacing.xs)
     }
 
     private var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
         return "\(v) (\(b))"
-    }
-}
-
-private struct SettingsSection<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: T3Spacing.sm) {
-            Text(title)
-                .font(T3Typography.footnote)
-                .fontWeight(.semibold)
-                .foregroundStyle(T3Color.textSecondary)
-                .padding(.horizontal, T3Spacing.sm)
-            VStack(spacing: 0) {
-                content
-            }
-            .padding(.horizontal, T3Spacing.md)
-            .padding(.vertical, T3Spacing.sm)
-            .background(T3Color.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous))
-        }
-    }
-}
-
-private struct SettingsRow<Accessory: View>: View {
-    let title: String
-    @ViewBuilder var accessory: Accessory
-
-    var body: some View {
-        HStack(spacing: T3Spacing.md) {
-            Text(title)
-                .foregroundStyle(T3Color.textPrimary)
-            Spacer(minLength: T3Spacing.md)
-            accessory
-                .foregroundStyle(T3Color.textSecondary)
-        }
-        .font(T3Typography.body)
-        .frame(minHeight: 44)
-    }
-}
-
-private struct SettingsPickerRow<Content: View>: View {
-    let title: String
-    @Binding var selection: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        Picker(selection: $selection) {
-            content
-        } label: {
-            Text(title)
-                .foregroundStyle(T3Color.textPrimary)
-        }
-        .font(T3Typography.body)
-        .frame(minHeight: 44)
-    }
-}
-
-private struct SettingsRowLabel: View {
-    let title: String
-    let accessory: String
-
-    var body: some View {
-        HStack(spacing: T3Spacing.md) {
-            Text(title)
-                .foregroundStyle(T3Color.primary)
-            Spacer()
-            Image(systemName: accessory)
-                .font(T3Typography.caption)
-                .foregroundStyle(T3Color.textTertiary)
-        }
-        .font(T3Typography.body)
-        .frame(minHeight: 44)
     }
 }

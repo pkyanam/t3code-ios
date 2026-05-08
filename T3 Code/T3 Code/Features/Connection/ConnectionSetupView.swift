@@ -5,7 +5,6 @@ struct ConnectionSetupView: View {
 
     @State private var serverURL: String = "http://"
     @State private var pairingToken: String = ""
-    @State private var pasteAndParse: Bool = false
     @State private var isWorking: Bool = false
     @State private var errorMessage: String?
     @FocusState private var focused: Field?
@@ -14,26 +13,47 @@ struct ConnectionSetupView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: T3Spacing.xl) {
-                    header
-                    formCard
-                    helpCard
+            ZStack {
+                T3Color.surfaceGrouped.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    headerBar
+                        .padding(.horizontal, T3Spacing.lg)
+                        .padding(.top, T3Spacing.md)
+                        .padding(.bottom, T3Spacing.lg)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: T3Spacing.xl) {
+                            heroBlock
+                            formCard
+                            helpCard
+                        }
+                        .padding(.horizontal, T3Spacing.lg)
+                        .padding(.bottom, T3Spacing.xxxl)
+                        .frame(maxWidth: 560, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .scrollIndicators(.hidden)
                 }
-                .padding(T3Spacing.lg)
-                .frame(maxWidth: 560, alignment: .leading)
-                .frame(maxWidth: .infinity)
             }
-            .background(T3Color.surfaceGrouped)
-            .navigationTitle("Connect")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
         }
     }
 
-    private var header: some View {
+    private var headerBar: some View {
+        HStack {
+            T3WordmarkLabel()
+            Spacer()
+            T3Style.Pill(text: "Pair", systemImage: "link",
+                         tint: T3Color.warning, emphasized: true)
+        }
+    }
+
+    private var heroBlock: some View {
         VStack(alignment: .leading, spacing: T3Spacing.sm) {
             Text("Pair this iPhone with a T3 Code server.")
                 .font(T3Typography.title)
+                .foregroundStyle(T3Color.textPrimary)
             Text("Open the desktop app → Settings → Connections → Network access. Copy the pairing URL or enter the host and token below.")
                 .font(T3Typography.callout)
                 .foregroundStyle(T3Color.textSecondary)
@@ -41,91 +61,87 @@ struct ConnectionSetupView: View {
     }
 
     private var formCard: some View {
-        VStack(alignment: .leading, spacing: T3Spacing.md) {
-            Text("Server")
-                .font(T3Typography.headline)
+        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+            T3Style.SectionHeader(title: "Server")
+            T3Style.Card {
+                VStack(alignment: .leading, spacing: T3Spacing.md) {
+                    fieldGroup(label: "Server URL") {
+                        TextField("http://192.168.1.20:3773", text: $serverURL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .font(T3Typography.body)
+                            .focused($focused, equals: .url)
+                    }
 
-            VStack(alignment: .leading, spacing: T3Spacing.xs) {
-                Text("Server URL")
+                    fieldGroup(label: "Pairing token", trailing: AnyView(
+                        Button("Paste link") { pastePairingLink() }
+                            .font(T3Typography.footnote)
+                            .foregroundStyle(T3Color.primary)
+                    )) {
+                        TextField("PAIRCODE", text: $pairingToken)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(T3Typography.body)
+                            .focused($focused, equals: .token)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(T3Typography.footnote)
+                            .foregroundStyle(T3Color.danger)
+                    }
+
+                    PrimaryButton(title: "Connect",
+                                  systemImage: "link",
+                                  isLoading: isWorking,
+                                  isEnabled: canConnect) {
+                        Task { await connect() }
+                    }
+                    .padding(.top, T3Spacing.xs)
+                }
+            }
+        }
+    }
+
+    private func fieldGroup<Content: View>(
+        label: String,
+        trailing: AnyView? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: T3Spacing.xs) {
+            HStack {
+                Text(label)
                     .font(T3Typography.footnote)
                     .foregroundStyle(T3Color.textSecondary)
-                TextField("http://192.168.1.20:3773", text: $serverURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .font(T3Typography.body)
-                    .focused($focused, equals: .url)
-                    .padding(.horizontal, T3Spacing.md)
-                    .frame(height: 44)
-                    .background(T3Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
-                            .stroke(T3Color.separator, lineWidth: 0.5)
-                    )
+                Spacer()
+                if let trailing { trailing }
             }
-
-            VStack(alignment: .leading, spacing: T3Spacing.xs) {
-                HStack {
-                    Text("Pairing token")
-                        .font(T3Typography.footnote)
-                        .foregroundStyle(T3Color.textSecondary)
-                    Spacer()
-                    Button("Paste link") { pastePairingLink() }
-                        .font(T3Typography.footnote)
-                        .foregroundStyle(T3Color.primary)
-                }
-                TextField("PAIRCODE", text: $pairingToken)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(T3Typography.body)
-                    .focused($focused, equals: .token)
-                    .padding(.horizontal, T3Spacing.md)
-                    .frame(height: 44)
-                    .background(T3Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
-                            .stroke(T3Color.separator, lineWidth: 0.5)
-                    )
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(T3Typography.footnote)
-                    .foregroundStyle(T3Color.danger)
-            }
-
-            PrimaryButton(title: "Connect",
-                          systemImage: "link",
-                          isLoading: isWorking,
-                          isEnabled: canConnect) {
-                Task { await connect() }
-            }
-            .padding(.top, T3Spacing.xs)
+            content()
+                .padding(.horizontal, T3Spacing.md)
+                .frame(height: 44)
+                .background(T3Color.surfaceMuted)
+                .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                        .stroke(T3Color.separator, lineWidth: 0.5)
+                )
         }
-        .padding(T3Spacing.lg)
-        .background(T3Color.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous))
     }
 
     private var helpCard: some View {
         VStack(alignment: .leading, spacing: T3Spacing.sm) {
-            Label("Tips", systemImage: "info.circle")
-                .font(T3Typography.headline)
+            T3Style.SectionHeader(title: "Tips")
+            T3Style.Card {
+                VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                    tipRow("Use a Tailscale or LAN host — the iPhone needs network reach to your Mac.")
+                    tipRow("Pairing tokens are one-time. After exchange, the iPhone keeps a session.")
+                    tipRow("HTTPS is required when pairing from an HTTPS browser; HTTP works direct from iOS.")
+                }
+                .font(T3Typography.footnote)
                 .foregroundStyle(T3Color.textSecondary)
-
-            VStack(alignment: .leading, spacing: T3Spacing.xs) {
-                tipRow("Use a Tailscale or LAN host — the iPhone needs network reach to your Mac.")
-                tipRow("Pairing tokens are one-time. After exchange, the iPhone keeps a session.")
-                tipRow("HTTPS is required when pairing from an HTTPS browser; HTTP works direct from iOS.")
             }
-            .font(T3Typography.footnote)
-            .foregroundStyle(T3Color.textSecondary)
         }
-        .padding(T3Spacing.lg)
-        .background(T3Color.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: T3Radius.lg, style: .continuous))
     }
 
     private func tipRow(_ text: String) -> some View {

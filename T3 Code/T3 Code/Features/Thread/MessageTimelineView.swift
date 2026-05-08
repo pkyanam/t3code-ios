@@ -61,11 +61,15 @@ struct MessageTimelineView: View {
     private var emptyState: some View {
         VStack(spacing: T3Spacing.md) {
             Image(systemName: "sparkles")
-                .font(.system(size: 24, weight: .medium))
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(AppAccent.color(for: accentRaw))
-                .frame(width: 44, height: 44)
+                .frame(width: 48, height: 48)
                 .background(T3Color.surfaceElevated)
                 .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                        .stroke(T3Color.separator, lineWidth: 0.5)
+                )
             VStack(spacing: T3Spacing.xs) {
                 Text("Ready")
                     .font(T3Typography.headline)
