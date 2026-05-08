@@ -230,17 +230,12 @@ struct ThreadsListView: View {
     }
 
     private var overviewHeader: some View {
-        VStack(alignment: .leading, spacing: T3Spacing.sm) {
-            Text("T3 Code")
-                .font(T3Typography.display(size: 34, weight: .bold))
-                .foregroundStyle(T3Color.textPrimary)
-            Text(overviewSubtitle)
-                .font(T3Typography.callout)
-                .foregroundStyle(T3Color.textSecondary)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, T3Spacing.sm)
+        Text(overviewSubtitle)
+            .font(T3Typography.callout)
+            .foregroundStyle(T3Color.textSecondary)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, T3Spacing.sm)
     }
 
     private var overviewSubtitle: String {
