@@ -136,6 +136,12 @@ final class ThreadStore {
     }
 
     func updateModelSelection(_ selection: ModelSelection) async {
+        await MainActor.run {
+            if var detail = self.detail {
+                detail.modelSelection = selection
+                self.detail = detail
+            }
+        }
         guard let client else { return }
         do {
             try await client.updateThreadModelSelection(threadId: threadId,

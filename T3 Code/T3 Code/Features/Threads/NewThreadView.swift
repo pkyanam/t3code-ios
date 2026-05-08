@@ -15,6 +15,7 @@ struct NewThreadView: View {
     @State private var errorMessage: String?
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var attachments: [LocalAttachment] = []
+    @State private var showModelPicker = false
     @FocusState private var promptFocused: Bool
 
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
@@ -236,25 +237,50 @@ struct NewThreadView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, T3Spacing.sm)
                 } else {
-                    menuRow(title: "Model",
-                            value: newThreadModelSummary) {
-                        ModelCatalogMenuSections(
-                            sections: modelCatalogSections,
+                    Button {
+                        showModelPicker = true
+                    } label: {
+                        HStack {
+                            Text("Model")
+                                .font(T3Typography.body)
+                                .foregroundStyle(T3Color.textPrimary)
+                            Spacer()
+                            HStack(spacing: T3Spacing.xs) {
+                                Text(newThreadModelSummary)
+                                    .font(T3Typography.callout)
+                                    .foregroundStyle(T3Color.textPrimary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.trailing)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(T3Color.textTertiary)
+                            }
+                            .padding(.horizontal, T3Spacing.md)
+                            .padding(.vertical, 6)
+                            .background(T3Color.surfaceMuted, in: Capsule())
+                            .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .padding(.horizontal, T3Spacing.xs)
+                    .sheet(isPresented: $showModelPicker) {
+                        ModelPickerSheet(
+                            providers: env.serverConfig?.providers ?? [],
+                            currentSelection: ModelSelection(
+                                instanceId: selectedProviderId ?? ProviderInstanceID(rawValue: ""),
+                                model: selectedModel
+                            ),
                             accentColor: AppAccent.color(for: accentRaw),
-                            isSelected: isCatalogEntrySelected,
-                            onSelect: { entry in
-                                selectedProviderId = entry.provider.instanceId
-                                selectedModel = entry.model.slug
+                            onSelect: { provider, slug in
+                                selectedProviderId = provider.instanceId
+                                selectedModel = slug
                             }
                         )
                     }
                 }
             }
         }
-    }
-
-    private var modelCatalogSections: [ModelCatalogSection] {
-        ModelCatalogSection.grouped(providers: env.serverConfig?.providers ?? [])
     }
 
     private var newThreadModelSummary: String {
@@ -311,39 +337,6 @@ struct NewThreadView: View {
     }
 
     // MARK: - Helpers
-
-    private func menuRow<MenuContent: View>(
-        title: String,
-        value: String,
-        @ViewBuilder menu: () -> MenuContent
-    ) -> some View {
-        HStack {
-            Text(title)
-                .font(T3Typography.body)
-                .foregroundStyle(T3Color.textPrimary)
-            Spacer()
-            Menu {
-                menu()
-            } label: {
-                HStack(spacing: T3Spacing.xs) {
-                    Text(value)
-                        .font(T3Typography.callout)
-                        .foregroundStyle(T3Color.textPrimary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.trailing)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(T3Color.textTertiary)
-                }
-                .padding(.horizontal, T3Spacing.md)
-                .padding(.vertical, 6)
-                .background(T3Color.surfaceMuted, in: Capsule())
-                .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
-            }
-        }
-        .frame(minHeight: 44)
-        .padding(.horizontal, T3Spacing.xs)
-    }
 
     private var usableProviders: [ServerProvider] {
         (env.serverConfig?.providers ?? [])

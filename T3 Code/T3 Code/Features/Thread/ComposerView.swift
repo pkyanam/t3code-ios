@@ -7,6 +7,7 @@ struct ComposerView: View {
     @State private var draft: String = ""
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var attachments: [LocalAttachment] = []
+    @State private var showModelPicker = false
     @FocusState private var focused: Bool
     @AppStorage("composerSize") private var composerSizeRaw: String = ComposerSize.comfortable.rawValue
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
@@ -70,7 +71,7 @@ struct ComposerView: View {
 
     private var controlRow: some View {
         HStack(spacing: T3Spacing.sm) {
-            modelMenu
+            modelChip
 
             Spacer(minLength: 0)
 
@@ -123,25 +124,8 @@ struct ComposerView: View {
         store.isTurnRunning
     }
 
-    @ViewBuilder
-    private var modelMenu: some View {
-        let sections = ModelCatalogSection.grouped(providers: env.serverConfig?.providers ?? [])
-        Menu {
-            if sections.isEmpty {
-                Text(modelName)
-            } else {
-                ModelCatalogMenuSections(
-                    sections: sections,
-                    accentColor: accentColor,
-                    isSelected: { entry in
-                        isCurrentModel(provider: entry.provider, slug: entry.model.slug)
-                    },
-                    onSelect: { entry in
-                        Task { await selectModel(provider: entry.provider, slug: entry.model.slug) }
-                    }
-                )
-            }
-        } label: {
+    private var modelChip: some View {
+        Button { showModelPicker = true } label: {
             HStack(spacing: 5) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 11, weight: .semibold))
@@ -159,17 +143,26 @@ struct ComposerView: View {
             .background(T3Color.surfaceMuted, in: Capsule())
             .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
         }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showModelPicker) {
+            modelPickerSheet
+        }
     }
 
-    private func isCurrentModel(provider: ServerProvider, slug: String) -> Bool {
-        guard let detail = store.detail else { return false }
-        return detail.modelSelection.instanceId == provider.instanceId
-            && detail.modelSelection.model == slug
+    private var modelPickerSheet: some View {
+        ModelPickerSheet(
+            providers: env.serverConfig?.providers ?? [],
+            currentSelection: store.detail?.modelSelection,
+            accentColor: accentColor,
+            onSelect: { provider, slug in
+                selectModel(provider: provider, slug: slug)
+            }
+        )
     }
 
-    private func selectModel(provider: ServerProvider, slug: String) async {
+    private func selectModel(provider: ServerProvider, slug: String) {
         let selection = ModelSelection(instanceId: provider.instanceId, model: slug)
-        await store.updateModelSelection(selection)
+        Task { await store.updateModelSelection(selection) }
     }
 
     // MARK: - Attachments

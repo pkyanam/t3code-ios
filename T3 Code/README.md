@@ -34,34 +34,38 @@ T3 Code/
 │   ├── Assets.xcassets/                # App icon, accent color assets
 │   ├── App/
 │   │   ├── AppRoot.swift               # Root view — routes based on session state (paired / unpaired)
-│   │   ├── MainTabView.swift           # 5-tab navigation: Projects, Plan, Chat, Files, Settings
+│   │   ├── MainTabView.swift           # 2-tab navigation: Chat & Settings
 │   │   ├── AppEnvironment.swift        # @Observable global session & connection state
 │   │   └── AppPreferences.swift        # Enums for appearance, accent, transcript density, composer size
 │   ├── Core/
 │   │   ├── Models/
-│   │   │   ├── Identifiers.swift       # ThreadID, ProjectID, MessageID, TurnID, CommandID, ProviderInstanceID
-│   │   │   ├── Message.swift           # Message, MessageRole, ChatImageAttachment, ISO8601DateFormatter
-│   │   │   ├── Thread.swift            # ThreadShell, ThreadDetail, OrchestrationSession, LatestTurn, ProjectShell
+│   │   │   ├── Identifiers.swift        # ThreadID, ProjectID, MessageID, TurnID, CommandID, ProviderInstanceID
+│   │   │   ├── Message.swift            # Message, MessageRole, ChatImageAttachment, ISO8601DateFormatter
+│   │   │   ├── Thread.swift             # ThreadShell, ThreadDetail, OrchestrationSession, LatestTurn, ProjectShell
 │   │   │   ├── ModelSelection.swift     # ModelSelection, ProviderOptionSelection, ProviderOptionValue
-│   │   │   ├── ServerConfig.swift       # ServerRuntimeConfig, ServerProvider, ServerProviderModel
+│   │   │   ├── ServerConfig.swift       # ServerRuntimeConfig, ServerProvider, ServerProviderModel, catalog grouping
 │   │   │   ├── EnvironmentDescriptor.swift  # Server environment bootstrap descriptor
-│   │   │   └── ServerEvent.swift        # ShellStreamItem, ThreadStreamItem, ThreadEvent decoding
+│   │   │   └── ServerEvent.swift         # ShellStreamItem, ThreadStreamItem, ThreadEvent decoding
 │   │   ├── Networking/
-│   │   │   ├── T3Connection.swift       # Actor-managed WebSocket with heartbeat, reconnect, status stream
-│   │   │   ├── T3Client.swift           # Actor-managed RPC client: request, subscribe, dispatch turn
-│   │   │   ├── EffectRPC.swift          # Effect RPC message protocol encoder / decoder
+│   │   │   ├── T3Connection.swift        # Actor-managed WebSocket with heartbeat, reconnect, status stream
+│   │   │   ├── T3Client.swift            # Actor-managed RPC client: request, subscribe, dispatch turn
+│   │   │   ├── EffectRPC.swift           # Effect RPC message protocol encoder / decoder
 │   │   │   └── Auth/
-│   │   │       ├── PairingFlow.swift    # HTTPS pairing: environment fetch, token exchange, WS token issuance
-│   │   │       └── KeychainStore.swift  # Secure credential storage (bearer token, server URL)
+│   │   │       ├── PairingFlow.swift     # HTTPS pairing: environment fetch, token exchange, WS token issuance
+│   │   │       └── KeychainStore.swift   # Secure credential storage (bearer token, server URL)
 │   │   └── Stores/
-│   │       ├── ThreadListStore.swift    # @Observable store — subscribes to shell stream, holds projects & threads
-│   │       └── ThreadStore.swift        # @Observable store — subscribes to thread stream, holds messages & session
+│   │       ├── ThreadListStore.swift     # @Observable store — subscribes to shell stream, holds projects & threads
+│   │       └── ThreadStore.swift         # @Observable store — subscribes to thread stream, holds messages & session
 │   ├── DesignSystem/
-│   │   ├── T3Color.swift                # Semantic color tokens (surface, text, separator, status) with dark mode
-│   │   ├── T3Typography.swift           # Type scale using DM Sans (falls back to system), code font variants
+│   │   ├── T3Color.swift                 # Semantic color tokens (surface, text, separator, status) with dark mode
+│   │   ├── T3Typography.swift            # Type scale using DM Sans (falls back to system), code font variants
 │   │   ├── T3Spacing.swift              # Spacing & radius tokens (xxs…xxxl, sm…xl)
+│   │   ├── T3Style.swift                # Reusable layout primitives: Card, SectionHeader, Pill, ToolbarChip
 │   │   └── Components/
+│   │       ├── ModelCatalogPicker.swift  # Sectioned model menu for provider-agnostic model selection
+│   │       ├── ModelPickerSheet.swift    # Two-level model picker sheet: provider chips + model list
 │   │       ├── MessageBubble.swift       # Chat bubble with role header, Markdown body, streaming dots
+│   │       ├── MarkdownText.swift        # Markdown rendering with code blocks and inline styling
 │   │       ├── ConnectionPill.swift      # Capsule indicator showing connection status (offline/connecting/connected/error)
 │   │       ├── PrimaryButton.swift       # Filled + outlined button styles
 │   │       └── StreamingDots.swift       # Animated three-dot "typing" indicator
@@ -69,15 +73,19 @@ T3 Code/
 │       ├── Connection/
 │       │   └── ConnectionSetupView.swift  # Pairing form: server URL, token, paste-link, connect
 │       ├── Threads/
-│       │   ├── ThreadsListView.swift      # Plan tab — custom nav bar, project sections, active thread list
+│       │   ├── ThreadsListView.swift      # Chat tab — thread list, pull-to-refresh, new thread button
 │       │   ├── ThreadRow.swift            # Thread row: icon, title, model, branch, relative date, status
-│       │   └── NewThreadView.swift        # Thread creation form: project picker, prompt, model, mode, access
+│       │   └── NewThreadView.swift        # Thread creation form: project, prompt, model picker, mode, access
 │       ├── Thread/
 │       │   ├── ThreadView.swift           # Thread detail container — timeline + composer, nav bar title
 │       │   ├── MessageTimelineView.swift  # Lazy scrollable message list with auto-scroll to bottom
-│       │   └── ComposerView.swift         # Message input: text editor, image picker, send button
+│       │   ├── ComposerView.swift         # Message input: text editor, model chip + sheet, image picker, send
+│       │   ├── ActivityRow.swift          # Thread activity rows (approvals, user inputs, proposed plans)
+│       │   ├── ProposedPlanCard.swift     # Card displaying proposed implementation plans
+│       │   ├── PendingApprovalCard.swift  # Approval request card with accept/reject actions
+│       │   └── PendingUserInputCard.swift # User input card for forms and prompts
 │       └── Settings/
-│           └── SettingsView.swift         # Appearance, accent, transcript density, composer size, server, sign out
+│           └── SettingsView.swift         # Appearance, accent, transcript density, composer size, provider list, sign out
 ```
 
 ## Architecture Decisions
@@ -120,7 +128,7 @@ Two persistent subscriptions drive the UI:
 ### Auth Flow
 
 ```
-[Desktop App] → generates pairing URL with ?token=... 
+[Desktop App] → generates pairing URL with ?token=...
                   ↓
 [iOS App]     → PairingFlow.parsePairingURL() extracts server URL + token
                   ↓
@@ -142,7 +150,18 @@ Credentials persist across app launches via `KeychainStore` (using `kSecClassGen
 - **Colors** — Semantic tokens (`T3Color.primary`, `.surface`, `.textPrimary`, `.separator`, etc.) with automatic dark mode via `UIColor(dynamicProvider:)`.
 - **Typography** — Uses DM Sans when available (falls back to system), with named styles from `.largeTitle` to `.caption` plus `.code` and `.codeBlock` monospaced variants.
 - **Spacing** — Defined as a fixed scale (`xxs`=2, `xs`=4, …, `xxxl`=32) and radius scale (`sm`=6, `md`=10, `lg`=14, `xl`=20).
-- **Components** — Reusable: `MessageBubble` (role header + Markdown body + streaming indicator), `ConnectionPill`, `PrimaryButton`/`SecondaryButton`, `StreamingDots`.
+- **Components** — Reusable: `MessageBubble` (role header + Markdown body + streaming indicator), `ModelPickerSheet` (two-level provider→model picker), `ConnectionPill`, `PrimaryButton`/`SecondaryButton`, `StreamingDots`.
+
+### Model Picker
+
+The model picker uses a two-level design (`ModelPickerSheet.swift`) to handle potentially large model catalogs:
+
+1. **Provider chips** — A horizontally scrollable row of provider chips (OpenCode, Anthropic, OpenAI, etc.), each showing the brand name and instance label. The selected provider is highlighted with the accent color.
+2. **Model list** — Below the chips, a sectioned list shows only models from the selected provider. For OpenCode providers with many models, entries are further grouped by routing bucket (Zen, Go, Standard) or sub-provider catalog name.
+
+Model selection uses **optimistic local updates**: the UI reflects the chosen model immediately before the server roundtrip completes. The change is then persisted via a `thread.meta.update` command and reconciled with streamed `thread.meta-updated` events. This eliminates the apparent "first click didn't work" issue that occurs when waiting for the server echo.
+
+Both the in-thread composer (`ComposerView`) and the new thread creation form (`NewThreadView`) use the sheet-based picker, presented by tapping the model chip/row.
 
 ## User Preferences (AppStorage)
 
@@ -168,6 +187,24 @@ Credentials persist across app launches via `KeychainStore` (using `kSecClassGen
 3. The app requires no additional dependencies — it uses only Apple frameworks (SwiftUI, Foundation, Security, PhotosUI).
 4. Press **Run**.
 
+### Command-Line Build & Deploy
+
+```bash
+# Build for a connected iPhone
+xcodebuild -project "T3 Code/T3 Code.xcodeproj" \
+  -scheme "T3 Code" \
+  -destination 'platform=iOS,id=<DEVICE_UDID>' \
+  -configuration Debug build
+
+# Install on device
+xcrun devicectl device install app --device <DEVICE_UDID> \
+  "<path_to_built.app>"
+
+# Launch
+xcrun devicectl device process launch --device <DEVICE_UDID> \
+  com.belweave.T3-Code
+```
+
 ## Key Behaviors
 
 - **Resume session** — If a valid bearer token and server URL exist in the Keychain at launch, the app reconnects automatically without requiring re-pairing.
@@ -175,6 +212,7 @@ Credentials persist across app launches via `KeychainStore` (using `kSecClassGen
 - **Keyboard dismissal** — Tapping on the message timeline dismisses the keyboard via `UIApplication.dismissKeyboard()`.
 - **Streaming dots** — Shown on the last assistant message when its `streaming` flag is `true`.
 - **Refreshable** — The thread list supports pull-to-refresh, though data is live-streamed and refresh is a no-op.
+- **Optimistic model selection** — Model changes are applied locally first for instant UI feedback, then synced with the server.
 - **Error handling** — Network errors surface through `connectionStatus.detail`, RPC errors through `ThreadStore.lastError`, and pairing errors through the connection setup form.
 
 ## Data Models
@@ -186,6 +224,7 @@ Credentials persist across app launches via `KeychainStore` (using `kSecClassGen
 - `SessionStatus` — `idle`, `starting`, `running`, `ready`, `interrupted`, `stopped`, `error`
 - `LatestTurnState` — `running`, `interrupted`, `completed`, `error`
 - `ConnectionState` — `offline`, `connecting`, `connected`, `error(String)`
+- `OpenCodeRoutingBucket` — `zen`, `go`, `standard`, `other` (used for grouping OpenCode models)
 
 ### Structs
 - `ThreadID`, `ProjectID`, `MessageID`, `TurnID`, `CommandID`, `ProviderInstanceID` — strongly-typed wrapper IDs
@@ -198,6 +237,7 @@ Credentials persist across app launches via `KeychainStore` (using `kSecClassGen
 - `LatestTurn` — state of the most recent turn
 - `ModelSelection` — provider instance + model slug + options
 - `ServerRuntimeConfig` / `ServerProvider` / `ServerProviderModel` — server capability descriptors
+- `ModelCatalogEntry` / `ModelCatalogSection` — one selectable row / grouped section in model pickers
 - `UploadImage` — local image prepared for upload (name, mimeType, base64 data URL)
 - `ShellSnapshot`, `ShellStreamItem`, `ThreadStreamItem`, `ThreadEvent` — streaming event types
 
