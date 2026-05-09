@@ -3,7 +3,7 @@ import SwiftUI
 struct ConnectionSetupView: View {
     @Environment(AppEnvironment.self) private var env
 
-    @State private var serverURL: String = "http://"
+    @State private var serverURL: String = ""
     @State private var pairingToken: String = ""
     @State private var isWorking: Bool = false
     @State private var errorMessage: String?
@@ -54,7 +54,7 @@ struct ConnectionSetupView: View {
             Text("Pair this iPhone with a T3 Code server.")
                 .font(T3Typography.title)
                 .foregroundStyle(T3Color.textPrimary)
-            Text("Open the desktop app → Settings → Connections → Network access. Copy the pairing URL or enter the host and token below.")
+            Text("Open the desktop app → Settings → Connections → Network access. Copy the pairing URL (HTTPS if you use a tunnel like Cloudflare) or enter the server URL and token separately.")
                 .font(T3Typography.callout)
                 .foregroundStyle(T3Color.textSecondary)
         }
@@ -66,7 +66,7 @@ struct ConnectionSetupView: View {
             T3Style.Card {
                 VStack(alignment: .leading, spacing: T3Spacing.md) {
                     fieldGroup(label: "Server URL") {
-                        TextField("http://192.168.1.20:3773", text: $serverURL)
+                        TextField("https://t3code-review.belweave.com", text: $serverURL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
@@ -92,11 +92,14 @@ struct ConnectionSetupView: View {
                             .foregroundStyle(T3Color.danger)
                     }
 
-                    PrimaryButton(title: "Connect",
-                                  systemImage: "link",
-                                  isLoading: isWorking,
-                                  isEnabled: canConnect) {
-                        Task { await connect() }
+                    HStack {
+                        T3ToolbarButton(title: "Connect",
+                                        systemImage: "link",
+                                        isLoading: isWorking,
+                                        isEnabled: canConnect) {
+                            Task { await connect() }
+                        }
+                        Spacer(minLength: 0)
                     }
                     .padding(.top, T3Spacing.xs)
                 }
@@ -134,9 +137,9 @@ struct ConnectionSetupView: View {
             T3Style.SectionHeader(title: "Tips")
             T3Style.Card {
                 VStack(alignment: .leading, spacing: T3Spacing.sm) {
-                    tipRow("Use a Tailscale or LAN host — the iPhone needs network reach to your Mac.")
+                    tipRow("Public HTTPS URLs (e.g. Cloudflare Tunnel) work: the app uses WSS for the live socket.")
+                    tipRow("Use Tailscale or LAN when you are not using a tunnel — the phone still needs a route to the server.")
                     tipRow("Pairing tokens are one-time. After exchange, the iPhone keeps a session.")
-                    tipRow("HTTPS is required when pairing from an HTTPS browser; HTTP works direct from iOS.")
                 }
                 .font(T3Typography.footnote)
                 .foregroundStyle(T3Color.textSecondary)
@@ -152,12 +155,16 @@ struct ConnectionSetupView: View {
     }
 
     private var canConnect: Bool {
-        URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
-            && !pairingToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let trimmedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmedURL), url.scheme != nil, url.host != nil else {
+            return false
+        }
+        return !pairingToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func pastePairingLink() {
-        guard let raw = UIPasteboard.general.string else { return }
+        guard let raw = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return }
         if let parsed = PairingFlow.parsePairingURL(raw) {
             serverURL = PairingFlow.serverBaseURL(from: parsed.serverURL).absoluteString
             pairingToken = parsed.token

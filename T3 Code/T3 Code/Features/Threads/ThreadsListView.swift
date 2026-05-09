@@ -1,22 +1,51 @@
 import SwiftUI
 
+enum ThreadSortOrder: String, CaseIterable {
+    case recent = "Recent"
+    case name   = "Name"
+}
+
 struct ThreadsListView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var showNewThread: Bool = false
-    @State private var selectedProjectFilter: ProjectID? = nil
-    @State private var pendingThreadAction: ThreadShell?
     @State private var pendingDeleteThread: ThreadShell?
     @State private var actionError: String?
+    @State private var sortOrder: ThreadSortOrder = .recent
+    @State private var collapsedProjects: Set<ProjectID> = []
+    @State private var expandedThreadCounts: [ProjectID: Int] = [:]
+    @State private var showQuickActions: Bool = false
+    @State private var showArchivedView: Bool = false
+    @State private var showSettingsView: Bool = false
+    @State private var quickActionQuery: String = ""
+    @State private var quickOpenThread: ThreadShell?
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
+
+    private let defaultVisibleThreadCount = 6
 
     var body: some View {
         NavigationStack {
             content
+                .navigationDestination(item: $quickOpenThread) { thread in
+                    ThreadView(threadShell: thread)
+                        .environment(env)
+                }
+                .navigationDestination(isPresented: $showArchivedView) {
+                    ArchivedThreadsView()
+                        .environment(env)
+                }
                 .toolbar(.hidden, for: .navigationBar)
                 .sheet(isPresented: $showNewThread) {
                     NewThreadView()
                         .environment(env)
                         .presentationDetents([.large])
+                }
+                .sheet(isPresented: $showQuickActions) {
+                    quickActionsSheet
+                        .presentationDetents([.medium, .large])
+                }
+                .sheet(isPresented: $showSettingsView) {
+                    SettingsView(isModal: true)
+                        .environment(env)
                 }
                 .alert("Couldn't update thread",
                        isPresented: Binding(get: { actionError != nil },
@@ -42,17 +71,12 @@ struct ThreadsListView: View {
         }
     }
 
+    // MARK: - Content
+
     @ViewBuilder
     private var content: some View {
         if activeThreads.isEmpty && projectsWithoutThreads.isEmpty {
-            VStack(spacing: 0) {
-                customNavBar
-                    .padding(.horizontal, T3Spacing.lg)
-                    .padding(.top, T3Spacing.md)
-                emptyState
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(T3Color.surfaceGrouped)
+            emptyState
         } else {
             populatedList
         }
@@ -61,47 +85,54 @@ struct ThreadsListView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: T3Spacing.md) {
+        VStack(spacing: 0) {
+            headerBar
+                .padding(.horizontal, T3Spacing.lg)
+                .padding(.top, T3Spacing.md)
+                .padding(.bottom, T3Spacing.lg)
+
             Spacer()
-            Image(systemName: "terminal")
-                .font(.system(size: 26, weight: .medium))
-                .foregroundStyle(accentColor)
-                .frame(width: 56, height: 56)
-                .background(T3Color.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
-                        .stroke(T3Color.separator, lineWidth: 0.5)
-                )
-            Text("No Threads")
-                .font(T3Typography.title)
-            Text(env.connectionStatus == .connected
-                 ? emptyStateMessage
-                 : "Waiting to connect to the T3 Code server…")
-                .font(T3Typography.callout)
-                .foregroundStyle(T3Color.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, T3Spacing.xl)
-            if env.connectionStatus == .connected && !env.threadList.projects.isEmpty {
-                Button {
-                    showNewThread = true
-                } label: {
-                    Label("New Thread", systemImage: "plus")
-                        .font(T3Typography.bodyEmphasis)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(accentColor)
-            }
-            if let detail = env.connectionStatus.detail {
-                Text(detail)
-                    .font(T3Typography.footnote)
-                    .foregroundStyle(T3Color.danger)
+
+            VStack(spacing: T3Spacing.md) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(accentColor)
+                    .frame(width: 56, height: 56)
+                    .background(T3Color.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
+                    )
+                Text("No Threads")
+                    .font(T3Typography.title)
+                Text(env.connectionStatus == .connected
+                     ? emptyStateMessage
+                     : "Waiting to connect to the T3 Code server…")
+                    .font(T3Typography.callout)
+                    .foregroundStyle(T3Color.textSecondary)
                     .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
                     .padding(.horizontal, T3Spacing.xl)
+                if env.connectionStatus == .connected && !env.threadList.projects.isEmpty {
+                    T3ToolbarButton(title: "New Thread",
+                                    systemImage: "plus") {
+                        showNewThread = true
+                    }
+                }
+                if let detail = env.connectionStatus.detail {
+                    Text(detail)
+                        .font(T3Typography.footnote)
+                        .foregroundStyle(T3Color.danger)
+                        .multilineTextAlignment(.center)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, T3Spacing.xl)
+                }
             }
+
             Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(T3Color.surfaceGrouped)
     }
 
     private var emptyStateMessage: String {
@@ -114,180 +145,348 @@ struct ThreadsListView: View {
 
     private var populatedList: some View {
         VStack(spacing: 0) {
-            customNavBar
+            headerBar
                 .padding(.horizontal, T3Spacing.lg)
                 .padding(.top, T3Spacing.md)
-                .padding(.bottom, T3Spacing.xs)
+                .padding(.bottom, T3Spacing.lg)
 
-            overviewHeader
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: []) {
+                    ForEach(Array(filteredGroupedThreads.enumerated()), id: \.element.0.id) { index, group in
+                        projectSection(project: group.0, threads: group.1, isLast: index == filteredGroupedThreads.count - 1)
+                    }
+
+                    if !filteredEmptyProjects.isEmpty {
+                        emptyProjectsSection
+                    }
+                }
                 .padding(.horizontal, T3Spacing.lg)
-                .padding(.bottom, T3Spacing.xs)
-
-            List {
-                if !filteredEmptyProjects.isEmpty {
-                    Section {
-                        ForEach(filteredEmptyProjects) { project in
-                            Button {
-                                showNewThread = true
-                            } label: {
-                                EmptyProjectRowContent(project: project, accentColor: accentColor)
-                            }
-                            .buttonStyle(.plain)
-                            .listRowBackground(T3Color.surfaceElevated)
-                        }
-                    } header: {
-                        sectionHeader(title: "Projects")
-                    }
-                }
-
-                ForEach(filteredGroupedThreads, id: \.0.id) { project, threads in
-                    Section {
-                        ForEach(threads, id: \.id) { thread in
-                            NavigationLink {
-                                ThreadView(threadShell: thread)
-                                    .environment(env)
-                            } label: {
-                                ThreadRow(thread: thread)
-                            }
-                            .listRowBackground(T3Color.surfaceElevated)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    pendingDeleteThread = thread
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                Button {
-                                    archive(thread: thread)
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
-                                }
-                                .tint(T3Color.warning)
-                            }
-                            .contextMenu {
-                                Button {
-                                    archive(thread: thread)
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
-                                }
-                                Button(role: .destructive) {
-                                    pendingDeleteThread = thread
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    } header: {
-                        sectionHeader(title: project.title)
-                    }
-                }
+                .padding(.bottom, T3Spacing.xxxl)
             }
-            .listStyle(.insetGrouped)
-            .listSectionSpacing(T3Spacing.sm)
-            .scrollContentBackground(.hidden)
-            .background(T3Color.surfaceGrouped)
-            .refreshable {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
+            .scrollIndicators(.hidden)
         }
         .background(T3Color.surfaceGrouped)
     }
 
-    private func sectionHeader(title: String) -> some View {
-        Text(title.uppercased())
-            .font(T3Typography.caption)
-            .tracking(0.6)
-            .foregroundStyle(T3Color.textTertiary)
-            .padding(.leading, -T3Spacing.xs)
-    }
+    // MARK: - Header bar
 
-    // MARK: - Custom Navigation Bar
-
-    private var customNavBar: some View {
+    private var headerBar: some View {
         HStack(spacing: T3Spacing.sm) {
-            T3WordmarkLabel()
+            VStack(alignment: .leading, spacing: 3) {
+                T3WordmarkLabel()
+                Text("PROJECTS")
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(T3Color.textTertiary)
+                    .textCase(.uppercase)
+            }
 
             Spacer(minLength: T3Spacing.sm)
 
+            // Sort
             Menu {
-                Button {
-                    selectedProjectFilter = nil
-                } label: {
-                    if selectedProjectFilter == nil {
-                        Label("All projects", systemImage: "checkmark")
-                    } else {
-                        Text("All projects")
-                    }
-                }
-                if !env.threadList.projects.isEmpty {
-                    Divider()
-                    ForEach(env.threadList.projects) { project in
-                        Button {
-                            selectedProjectFilter = project.id
-                        } label: {
-                            if selectedProjectFilter == project.id {
-                                Label(project.title, systemImage: "checkmark")
-                            } else {
-                                Text(project.title)
-                            }
+                ForEach(ThreadSortOrder.allCases, id: \.self) { order in
+                    Button {
+                        sortOrder = order
+                    } label: {
+                        if sortOrder == order {
+                            Label(order.rawValue, systemImage: "checkmark")
+                        } else {
+                            Text(order.rawValue)
                         }
                     }
                 }
             } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(currentProjectFilterLabel)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                }
-                .foregroundStyle(T3Color.textPrimary)
-                .padding(.horizontal, T3Spacing.sm)
-                .padding(.vertical, 7)
-                .background(T3Color.surfaceElevated)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(T3Color.textPrimary)
+                    .background(T3Color.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
+                    )
+            }
+            .buttonStyle(.plain)
+
+            // Expand / collapse all
+            T3Style.ToolbarChip(action: toggleAllExpansion) {
+                Image(systemName: allCollapsed ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(T3Color.textPrimary)
             }
 
+            // New thread
             T3Style.ToolbarChip(action: { showNewThread = true }) {
                 Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(env.threadList.projects.isEmpty || env.connectionStatus != .connected
                                      ? T3Color.textTertiary
                                      : T3Color.textPrimary)
             }
             .disabled(env.threadList.projects.isEmpty || env.connectionStatus != .connected)
+
+            T3Style.ToolbarChip(action: { showQuickActions = true }) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(T3Color.textPrimary)
+            }
         }
     }
 
-    private var currentProjectFilterLabel: String {
-        if let id = selectedProjectFilter,
-           let project = env.threadList.project(id: id) {
-            return project.title
+    private var quickActionsSheet: some View {
+        NavigationStack {
+            List {
+                Section("Actions") {
+                    Button {
+                        showQuickActions = false
+                        showNewThread = true
+                    } label: {
+                        Label("New Thread", systemImage: "plus.bubble")
+                    }
+                    .disabled(env.threadList.projects.isEmpty || env.connectionStatus != .connected)
+
+                    Button {
+                        showQuickActions = false
+                        showArchivedView = true
+                    } label: {
+                        Label("Archived Threads", systemImage: "archivebox")
+                    }
+
+                    Button {
+                        showQuickActions = false
+                        showSettingsView = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+
+                    Button {
+                        showQuickActions = false
+                        Task { await env.refreshServerConfig() }
+                    } label: {
+                        Label("Refresh Server Config", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(env.client == nil)
+                }
+                if !filteredQuickThreads.isEmpty {
+                    Section("Recent Threads") {
+                        ForEach(filteredQuickThreads, id: \.id) { thread in
+                            Button {
+                                showQuickActions = false
+                                Task { @MainActor in
+                                    quickOpenThread = thread
+                                }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(thread.title)
+                                        .font(T3Typography.body)
+                                        .foregroundStyle(T3Color.textPrimary)
+                                        .lineLimit(1)
+                                    Text(env.threadList.project(id: thread.projectId)?.title ?? "Unknown project")
+                                        .font(T3Typography.footnote)
+                                        .foregroundStyle(T3Color.textTertiary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $quickActionQuery, prompt: "Search actions and threads")
+            .navigationTitle("Quick Actions")
+            .navigationBarTitleDisplayMode(.inline)
         }
-        return "Open"
     }
 
-    // MARK: - Overview header
+    private var filteredQuickThreads: [ThreadShell] {
+        let query = quickActionQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let active = activeThreads
+        let filtered = query.isEmpty ? active : active.filter { thread in
+            let titleMatch = thread.title.localizedCaseInsensitiveContains(query)
+            let projectMatch = (env.threadList.project(id: thread.projectId)?.title ?? "")
+                .localizedCaseInsensitiveContains(query)
+            return titleMatch || projectMatch
+        }
+        return Array(filtered.prefix(12))
+    }
 
-    private var overviewHeader: some View {
-        HStack(alignment: .center) {
-            Text(overviewSubtitle)
-                .font(T3Typography.callout)
-                .foregroundStyle(T3Color.textSecondary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            ConnectionPill(state: env.connectionStatus)
+    // MARK: - Project section
+
+    private func projectSection(project: ProjectShell, threads: [ThreadShell], isLast: Bool) -> some View {
+        let isCollapsed = collapsedProjects.contains(project.id)
+        let visibleCount = expandedThreadCounts[project.id] ?? defaultVisibleThreadCount
+        let visibleThreads = Array(threads.prefix(visibleCount))
+        let hasMore = threads.count > visibleCount
+
+        return VStack(alignment: .leading, spacing: 0) {
+            // Project header
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if isCollapsed {
+                        collapsedProjects.remove(project.id)
+                    } else {
+                        collapsedProjects.insert(project.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: T3Spacing.sm) {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(T3Color.textTertiary)
+                        .frame(width: 16)
+
+                    Image(systemName: "folder")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(T3Color.textSecondary)
+
+                    Text(project.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(T3Color.textPrimary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, T3Spacing.sm)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !isCollapsed {
+                // Thread rows
+                ForEach(Array(visibleThreads.enumerated()), id: \.element.id) { index, thread in
+                    threadRow(thread: thread, isFirst: index == 0)
+                }
+
+                // Show more
+                if hasMore {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            expandedThreadCounts[project.id] = (expandedThreadCounts[project.id] ?? defaultVisibleThreadCount) + defaultVisibleThreadCount
+                        }
+                    } label: {
+                        HStack(spacing: T3Spacing.sm) {
+                            Spacer().frame(width: 16 + T3Spacing.sm + 14 + T3Spacing.sm)
+                            Text("Show more")
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(T3Color.textSecondary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, T3Spacing.sm)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if !isLast {
+                Divider()
+                    .overlay(T3Color.separator.opacity(0.5))
+                    .padding(.vertical, T3Spacing.xs)
+            }
         }
     }
 
-    private var overviewSubtitle: String {
-        let activeCount = activeThreads.count
-        let projectCount = env.threadList.projects.count
-        let threadWord = activeCount == 1 ? "thread" : "threads"
-        let projectWord = projectCount == 1 ? "project" : "projects"
-        return "\(activeCount) active \(threadWord) across \(projectCount) \(projectWord)"
+    // MARK: - Thread row
+
+    private func threadRow(thread: ThreadShell, isFirst: Bool) -> some View {
+        NavigationLink {
+            ThreadView(threadShell: thread)
+                .environment(env)
+        } label: {
+            HStack(spacing: T3Spacing.md) {
+                Spacer().frame(width: 16 + T3Spacing.sm)
+
+                Text(thread.title)
+                    .font(.system(size: 15, weight: isFirst ? .semibold : .regular))
+                    .foregroundStyle(T3Color.textPrimary)
+                    .lineLimit(1)
+
+                Spacer(minLength: T3Spacing.md)
+
+                Text(relativeDate(for: thread))
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(isFirst ? T3Color.textSecondary : T3Color.textTertiary)
+                    .monospacedDigit()
+            }
+            .padding(.vertical, T3Spacing.sm)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                archive(thread: thread)
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            Button(role: .destructive) {
+                pendingDeleteThread = thread
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: - Empty projects section
+
+    private var emptyProjectsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(filteredEmptyProjects.enumerated()), id: \.element.id) { index, project in
+                Button {
+                    showNewThread = true
+                } label: {
+                    HStack(spacing: T3Spacing.sm) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(T3Color.textSecondary)
+
+                        Text(project.title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(T3Color.textPrimary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 0)
+
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(accentColor)
+                    }
+                    .padding(.vertical, T3Spacing.sm)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if index < filteredEmptyProjects.count - 1 {
+                    Divider()
+                        .overlay(T3Color.separator.opacity(0.5))
+                        .padding(.vertical, T3Spacing.xs)
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func relativeDate(for thread: ThreadShell) -> String {
+        let date = thread.latestUserMessageAt ?? thread.updatedAt
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private var allCollapsed: Bool {
+        let projectIDs = Set(filteredGroupedThreads.map { $0.0.id })
+        return !projectIDs.isEmpty && projectIDs.isSubset(of: collapsedProjects)
+    }
+
+    private func toggleAllExpansion() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if allCollapsed {
+                collapsedProjects.removeAll()
+            } else {
+                collapsedProjects = Set(filteredGroupedThreads.map { $0.0.id })
+            }
+        }
     }
 
     // MARK: - Actions
@@ -330,8 +529,22 @@ struct ThreadsListView: View {
     }
 
     private var filteredGroupedThreads: [(ProjectShell, [ThreadShell])] {
-        guard let id = selectedProjectFilter else { return groupedThreads }
-        return groupedThreads.filter { $0.0.id == id }
+        groupedThreads.map { project, threads in
+            (project, sortThreads(threads))
+        }
+    }
+
+    private func sortThreads(_ threads: [ThreadShell]) -> [ThreadShell] {
+        switch sortOrder {
+        case .recent:
+            return threads.sorted {
+                let l = $0.latestUserMessageAt ?? $0.updatedAt
+                let r = $1.latestUserMessageAt ?? $1.updatedAt
+                return l > r
+            }
+        case .name:
+            return threads.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
     }
 
     private var projectsWithoutThreads: [ProjectShell] {
@@ -340,46 +553,10 @@ struct ThreadsListView: View {
     }
 
     private var filteredEmptyProjects: [ProjectShell] {
-        guard let id = selectedProjectFilter else { return projectsWithoutThreads }
-        return projectsWithoutThreads.filter { $0.id == id }
+        projectsWithoutThreads
     }
 
     private var accentColor: Color {
         AppAccent.color(for: accentRaw)
-    }
-}
-
-// MARK: - Empty Project Row
-
-private struct EmptyProjectRowContent: View {
-    let project: ProjectShell
-    let accentColor: Color
-
-    var body: some View {
-        HStack(spacing: T3Spacing.md) {
-            Image(systemName: "folder")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(T3Color.textTertiary)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: T3Spacing.xs) {
-                Text(project.title)
-                    .font(T3Typography.headline)
-                    .foregroundStyle(T3Color.textPrimary)
-                    .lineLimit(1)
-                Text(project.workspaceRoot)
-                    .font(T3Typography.footnote)
-                    .foregroundStyle(T3Color.textTertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: T3Spacing.md)
-            Image(systemName: "plus")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(accentColor)
-                .frame(width: 26, height: 26)
-                .background(accentColor.opacity(0.16), in: Circle())
-        }
-        .padding(.vertical, T3Spacing.xs)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
     }
 }

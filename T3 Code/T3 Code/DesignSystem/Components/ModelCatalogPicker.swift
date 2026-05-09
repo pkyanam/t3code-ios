@@ -24,6 +24,8 @@ struct ModelCatalogMenuSections: View {
     @ViewBuilder
     private func rowLabel(_ entry: ModelCatalogEntry) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: T3Spacing.sm) {
+            ProviderIcon(driver: entry.provider.driver, size: 12)
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.model.label)
                     .font(.body)

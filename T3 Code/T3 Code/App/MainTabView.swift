@@ -10,7 +10,7 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        let tabs = TabView(selection: $selectedTab) {
             ThreadsListView()
                 .tabItem {
                     Label("Chat", systemImage: "bubble.left.and.bubble.right")
@@ -23,8 +23,13 @@ struct MainTabView: View {
                 }
                 .tag(Tab.settings)
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
         .tint(AppAccent.color(for: accentRaw))
+
+        if #available(iOS 26.0, *) {
+            tabs.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            tabs
+        }
     }
 }
 

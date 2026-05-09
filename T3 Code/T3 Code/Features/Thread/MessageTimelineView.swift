@@ -173,14 +173,18 @@ struct MessageTimelineView: View {
                       ? "arrow.down.circle.fill" : "arrow.down")
                     .font(.system(size: 13, weight: .semibold))
                 Text(label)
-                    .font(T3Typography.footnote.weight(.semibold))
+                    .font(.system(size: 13, weight: .medium))
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(accentColor)
             .padding(.horizontal, T3Spacing.md)
             .padding(.vertical, 8)
-            .background(accentColor, in: Capsule())
+            .background(
+                RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                    .fill(T3Color.surfaceElevated)
+            )
             .overlay(
-                Capsule().stroke(.white.opacity(0.18), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                    .stroke(T3Color.separator, lineWidth: 0.5)
             )
             .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
         }

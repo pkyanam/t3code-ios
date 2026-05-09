@@ -86,7 +86,8 @@ enum PairingFlow {
     }
 
     static func parsePairingURL(_ raw: String) -> (serverURL: URL, token: String)? {
-        guard let comps = URLComponents(string: raw) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let comps = URLComponents(string: trimmed) else { return nil }
 
         if let host = comps.queryItems?.first(where: { $0.name == "host" })?.value,
            let backend = URL(string: host),

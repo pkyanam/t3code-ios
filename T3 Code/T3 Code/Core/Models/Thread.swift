@@ -293,3 +293,96 @@ struct ProjectShell: Codable, Hashable, Sendable, Identifiable {
         try c.encode(ISO8601Decoder.formatter.string(from: updatedAt), forKey: .updatedAt)
     }
 }
+
+// MARK: - Git / VCS
+
+struct VcsWorkingTreeFile: Hashable, Sendable {
+    let path: String
+    let insertions: Int
+    let deletions: Int
+}
+
+struct VcsWorkingTreeSummary: Hashable, Sendable {
+    let files: [VcsWorkingTreeFile]
+    let insertions: Int
+    let deletions: Int
+}
+
+struct VcsStatusSummary: Hashable, Sendable {
+    let isRepo: Bool
+    let refName: String?
+    let hasWorkingTreeChanges: Bool
+    let hasUpstream: Bool
+    let aheadCount: Int
+    let behindCount: Int
+    let workingTree: VcsWorkingTreeSummary
+
+    nonisolated static func decode(from any: Any) throws -> VcsStatusSummary {
+        let data = try JSONSerialization.data(withJSONObject: any)
+        let root = try JSONDecoder().decode(VcsStatusSummaryPayload.self, from: data)
+        return VcsStatusSummary(
+            isRepo: root.isRepo,
+            refName: root.refName,
+            hasWorkingTreeChanges: root.hasWorkingTreeChanges,
+            hasUpstream: root.hasUpstream,
+            aheadCount: root.aheadCount,
+            behindCount: root.behindCount,
+            workingTree: VcsWorkingTreeSummary(
+                files: root.workingTree.files.map {
+                    VcsWorkingTreeFile(path: $0.path, insertions: $0.insertions, deletions: $0.deletions)
+                },
+                insertions: root.workingTree.insertions,
+                deletions: root.workingTree.deletions
+            )
+        )
+    }
+}
+
+private struct VcsStatusSummaryPayload: Decodable {
+    struct WorkingTreePayload: Decodable {
+        struct FilePayload: Decodable {
+            let path: String
+            let insertions: Int
+            let deletions: Int
+        }
+        let files: [FilePayload]
+        let insertions: Int
+        let deletions: Int
+    }
+
+    let isRepo: Bool
+    let refName: String?
+    let hasWorkingTreeChanges: Bool
+    let hasUpstream: Bool
+    let aheadCount: Int
+    let behindCount: Int
+    let workingTree: WorkingTreePayload
+}
+
+struct VcsPullSummary: Hashable, Sendable {
+    let status: String
+    let refName: String
+    let upstreamRef: String?
+
+    nonisolated static func decode(from any: Any) throws -> VcsPullSummary {
+        let data = try JSONSerialization.data(withJSONObject: any)
+        let payload = try JSONDecoder().decode(VcsPullSummaryPayload.self, from: data)
+        return VcsPullSummary(status: payload.status, refName: payload.refName, upstreamRef: payload.upstreamRef)
+    }
+}
+
+private struct VcsPullSummaryPayload: Decodable {
+    let status: String
+    let refName: String
+    let upstreamRef: String?
+}
+
+enum GitStackedAction: String, Sendable {
+    case commit
+    case push
+}
+
+struct GitActionSummary: Hashable, Sendable {
+    let toastTitle: String
+    let toastDescription: String?
+}

@@ -74,18 +74,25 @@ struct ProposedPlanCard: View {
                 Button(action: onImplement) {
                     HStack(spacing: T3Spacing.xs) {
                         if isImplementing {
-                            ProgressView().controlSize(.small).tint(.white)
+                            ProgressView().controlSize(.small).tint(AppAccent.color(for: accentRaw))
                         } else {
                             Image(systemName: "play.fill")
+                                .font(.system(size: 13, weight: .semibold))
                         }
                         Text(isImplementing ? "Starting…" : "Implement plan")
-                            .font(T3Typography.bodyEmphasis)
+                            .font(.system(size: 13, weight: .medium))
                     }
-                    .padding(.horizontal, T3Spacing.lg)
-                    .padding(.vertical, 9)
-                    .background(AppAccent.color(for: accentRaw))
-                    .foregroundStyle(.white)
-                    .clipShape(Capsule())
+                    .padding(.horizontal, T3Spacing.md)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(AppAccent.color(for: accentRaw))
+                    .background(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .fill(T3Color.surfaceElevated)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(AppAccent.color(for: accentRaw).opacity(0.45), lineWidth: 0.5)
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(isImplementing)

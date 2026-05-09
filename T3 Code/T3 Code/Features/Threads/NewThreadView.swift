@@ -80,9 +80,7 @@ struct NewThreadView: View {
                     .foregroundStyle(T3Color.textPrimary)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("New Thread")
-                    .font(T3Typography.headline)
-                    .foregroundStyle(T3Color.textPrimary)
+                T3WordmarkLabel()
                 Text("Spin up a new conversation")
                     .font(T3Typography.footnote)
                     .foregroundStyle(T3Color.textTertiary)
@@ -246,6 +244,9 @@ struct NewThreadView: View {
                                 .foregroundStyle(T3Color.textPrimary)
                             Spacer()
                             HStack(spacing: T3Spacing.xs) {
+                                if let driver = selectedProvider?.driver {
+                                    ProviderIcon(driver: driver, size: 12)
+                                }
                                 Text(newThreadModelSummary)
                                     .font(T3Typography.callout)
                                     .foregroundStyle(T3Color.textPrimary)

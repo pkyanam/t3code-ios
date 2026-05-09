@@ -1,10 +1,21 @@
 import SwiftUI
 
+private enum ArchivedSortOrder: String, CaseIterable {
+    case recent = "Recently Archived"
+    case title = "Title"
+    case project = "Project"
+}
+
 struct ArchivedThreadsView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
     @State private var actionError: String?
     @State private var pendingDeleteThread: ThreadShell?
+    @State private var searchText: String = ""
+    @State private var showBulkActionDialog: Bool = false
+    @State private var showConfirmBulkDelete: Bool = false
+    @State private var showConfirmBulkUnarchive: Bool = false
+    @State private var sortOrder: ArchivedSortOrder = .recent
 
     var body: some View {
         ZStack {
@@ -25,6 +36,7 @@ struct ArchivedThreadsView: View {
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search archived threads")
         .alert("Couldn't update thread",
                isPresented: Binding(get: { actionError != nil },
                                     set: { if !$0 { actionError = nil } })) {
@@ -46,6 +58,35 @@ struct ArchivedThreadsView: View {
         } message: { _ in
             Text("This thread will be permanently removed from the desktop server.")
         }
+        .confirmationDialog("Bulk actions", isPresented: $showBulkActionDialog, titleVisibility: .visible) {
+            Button("Unarchive all shown") {
+                showConfirmBulkUnarchive = true
+            }
+            Button("Delete all shown", role: .destructive) {
+                showConfirmBulkDelete = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Applies to the currently filtered archived threads.")
+        }
+        .alert("Unarchive all shown threads?",
+               isPresented: $showConfirmBulkUnarchive) {
+            Button("Unarchive") {
+                unarchiveAllVisible()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(archivedThreads.count) thread\(archivedThreads.count == 1 ? "" : "s") will be moved back to active.")
+        }
+        .alert("Delete all shown threads?",
+               isPresented: $showConfirmBulkDelete) {
+            Button("Delete", role: .destructive) {
+                deleteAllVisible()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes \(archivedThreads.count) thread\(archivedThreads.count == 1 ? "" : "s") from the desktop server.")
+        }
     }
 
     // MARK: - Header
@@ -58,14 +99,43 @@ struct ArchivedThreadsView: View {
                     .foregroundStyle(T3Color.textPrimary)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Archived")
-                    .font(T3Typography.title)
-                    .foregroundStyle(T3Color.textPrimary)
+                T3WordmarkLabel()
                 Text("\(archivedThreads.count) thread\(archivedThreads.count == 1 ? "" : "s")")
                     .font(T3Typography.footnote)
                     .foregroundStyle(T3Color.textTertiary)
             }
             Spacer()
+            Menu {
+                ForEach(ArchivedSortOrder.allCases, id: \.self) { option in
+                    Button {
+                        sortOrder = option
+                    } label: {
+                        if sortOrder == option {
+                            Label(option.rawValue, systemImage: "checkmark")
+                        } else {
+                            Text(option.rawValue)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(T3Color.textPrimary)
+                    .background(T3Color.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
+                    )
+            }
+            if !archivedThreads.isEmpty {
+                T3Style.ToolbarChip(action: { showBulkActionDialog = true }) {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(T3Color.textPrimary)
+                }
+            }
         }
     }
 
@@ -84,9 +154,13 @@ struct ArchivedThreadsView: View {
                     RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
                         .stroke(T3Color.separator, lineWidth: 0.5)
                 )
-            Text("No archived threads")
+            Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                 ? "No archived threads"
+                 : "No matches")
                 .font(T3Typography.title)
-            Text("Archive threads from the chat list to keep them around without cluttering your active conversations.")
+            Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                 ? "Archive threads from the chat list to keep them around without cluttering your active conversations."
+                 : "Try a different search term or clear the filter.")
                 .font(T3Typography.callout)
                 .foregroundStyle(T3Color.textSecondary)
                 .multilineTextAlignment(.center)
@@ -210,12 +284,63 @@ struct ArchivedThreadsView: View {
         }
     }
 
+    private func unarchiveAllVisible() {
+        guard let client = env.client else { return }
+        let targets = archivedThreads
+        Task {
+            for thread in targets {
+                do {
+                    try await client.unarchiveThread(threadId: thread.id)
+                } catch {
+                    await MainActor.run { actionError = error.localizedDescription }
+                    break
+                }
+            }
+        }
+    }
+
+    private func deleteAllVisible() {
+        guard let client = env.client else { return }
+        let targets = archivedThreads
+        Task {
+            for thread in targets {
+                do {
+                    try await client.deleteThread(threadId: thread.id)
+                } catch {
+                    await MainActor.run { actionError = error.localizedDescription }
+                    break
+                }
+            }
+        }
+    }
+
     // MARK: - Data
 
     private var archivedThreads: [ThreadShell] {
-        env.threadList.threads
+        let filtered = env.threadList.threads
             .filter { $0.archivedAt != nil }
-            .sorted { ($0.archivedAt ?? $0.updatedAt) > ($1.archivedAt ?? $1.updatedAt) }
+            .filter { thread in
+                let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !query.isEmpty else { return true }
+                let inTitle = thread.title.localizedCaseInsensitiveContains(query)
+                let projectTitle = env.threadList.project(id: thread.projectId)?.title ?? ""
+                return inTitle || projectTitle.localizedCaseInsensitiveContains(query)
+            }
+        switch sortOrder {
+        case .recent:
+            return filtered.sorted { ($0.archivedAt ?? $0.updatedAt) > ($1.archivedAt ?? $1.updatedAt) }
+        case .title:
+            return filtered.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .project:
+            return filtered.sorted {
+                let lhsProject = env.threadList.project(id: $0.projectId)?.title ?? ""
+                let rhsProject = env.threadList.project(id: $1.projectId)?.title ?? ""
+                if lhsProject != rhsProject {
+                    return lhsProject.localizedStandardCompare(rhsProject) == .orderedAscending
+                }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        }
     }
 
     private var archivedGrouped: [(ProjectShell, [ThreadShell])] {

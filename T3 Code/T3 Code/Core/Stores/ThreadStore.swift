@@ -1,6 +1,15 @@
 import Foundation
 import Observation
 
+struct ThreadDiffChange: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let command: String?
+    let detail: String?
+    let files: [String]
+    let createdAt: Date
+}
+
 @Observable
 final class ThreadStore {
     let threadId: ThreadID
@@ -46,6 +55,23 @@ final class ThreadStore {
         if let session, session.status == .running { return true }
         if let state = detail?.latestTurn?.state, state == .running { return true }
         return isSending
+    }
+
+    var diffChanges: [ThreadDiffChange] {
+        let rendered = RenderableActivity.collapse(activities)
+        return rendered
+            .filter { !$0.changedFiles.isEmpty }
+            .map {
+                ThreadDiffChange(
+                    id: $0.id,
+                    title: $0.title,
+                    command: $0.command,
+                    detail: $0.detail,
+                    files: $0.changedFiles,
+                    createdAt: $0.createdAt
+                )
+            }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     func sendMessage(text: String,

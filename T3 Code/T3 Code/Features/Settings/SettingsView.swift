@@ -8,6 +8,10 @@ struct SettingsView: View {
     @State private var confirmSignOut: Bool = false
     @State private var didCopyURL: Bool = false
     @State private var isRefreshingConfig: Bool = false
+    @State private var switchingProfileID: SavedServerProfile.ID?
+    @State private var renamingProfile: SavedServerProfile?
+    @State private var renameDraft: String = ""
+    @State private var pendingDeleteProfile: SavedServerProfile?
 
     @AppStorage("appearance") private var appearanceRaw: String = AppAppearance.system.rawValue
     @AppStorage("accent") private var accentRaw: String = AppAccent.blue.rawValue
@@ -72,6 +76,43 @@ struct SettingsView: View {
             } message: {
                 Text("Your bearer token will be removed from this device. Pair again from the desktop app to reconnect.")
             }
+            .confirmationDialog("Delete saved server?",
+                                isPresented: Binding(get: { pendingDeleteProfile != nil },
+                                                     set: { if !$0 { pendingDeleteProfile = nil } }),
+                                titleVisibility: .visible,
+                                presenting: pendingDeleteProfile) { profile in
+                Button("Delete", role: .destructive) {
+                    let target = profile
+                    pendingDeleteProfile = nil
+                    Task { await env.removeProfile(id: target.id) }
+                }
+                Button("Cancel", role: .cancel) { pendingDeleteProfile = nil }
+            } message: { profile in
+                Text("Remove \"\(profile.name)\" from this device?")
+            }
+            .sheet(item: $renamingProfile) { profile in
+                NavigationStack {
+                    Form {
+                        TextField("Server name", text: $renameDraft)
+                            .textInputAutocapitalization(.never)
+                    }
+                    .navigationTitle("Rename Server")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { renamingProfile = nil }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Save") {
+                                env.renameProfile(id: profile.id, name: renameDraft)
+                                renamingProfile = nil
+                            }
+                            .disabled(renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+                }
+                .presentationDetents([.height(220)])
+            }
         }
     }
 
@@ -125,6 +166,70 @@ struct SettingsView: View {
                             .foregroundStyle(T3Color.danger)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if !env.savedProfiles.isEmpty {
+                        Divider().overlay(T3Color.separator)
+                        VStack(alignment: .leading, spacing: T3Spacing.sm) {
+                            Text("Saved servers")
+                                .font(T3Typography.callout)
+                                .foregroundStyle(T3Color.textSecondary)
+                            ForEach(env.savedProfiles.sorted(by: { $0.lastUsedAt > $1.lastUsedAt })) { profile in
+                                HStack(spacing: T3Spacing.sm) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(profile.name)
+                                            .font(T3Typography.body)
+                                            .foregroundStyle(T3Color.textPrimary)
+                                            .lineLimit(1)
+                                        Text(profile.serverURL.host ?? profile.serverURL.absoluteString)
+                                            .font(T3Typography.footnote)
+                                            .foregroundStyle(T3Color.textTertiary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: T3Spacing.sm)
+                                    if env.activeProfileID == profile.id {
+                                        T3Style.Pill(text: "Active", tint: T3Color.success, emphasized: true)
+                                    } else {
+                                        Button {
+                                            switchingProfileID = profile.id
+                                            Task {
+                                                await env.switchToProfile(id: profile.id)
+                                                await MainActor.run { switchingProfileID = nil }
+                                            }
+                                        } label: {
+                                            if switchingProfileID == profile.id {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            } else {
+                                                Text("Switch")
+                                                    .font(T3Typography.footnote.weight(.semibold))
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(switchingProfileID != nil)
+                                    }
+
+                                    Menu {
+                                        Button {
+                                            renameDraft = profile.name
+                                            renamingProfile = profile
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+                                        Button(role: .destructive) {
+                                            pendingDeleteProfile = profile
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    } label: {
+                                        Image(systemName: "ellipsis")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(T3Color.textSecondary)
+                                            .frame(width: 28, height: 28)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

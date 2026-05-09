@@ -68,9 +68,10 @@ enum T3Style {
         }
     }
 
-    // Chip-style toolbar button: icon inside a hairline-bordered circle/capsule.
+    // Chip-style toolbar button: icon inside a hairline-bordered rounded square.
+    // Matches the desktop toolbar icon-buttons (e.g. square-arrow, plus-minus).
     struct ToolbarChip<Label: View>: View {
-        var size: CGFloat = 38
+        var size: CGFloat = 34
         let action: () -> Void
         @ViewBuilder var label: () -> Label
 
@@ -79,9 +80,10 @@ enum T3Style {
                 label()
                     .frame(width: size, height: size)
                     .background(T3Color.surfaceElevated)
-                    .clipShape(Circle())
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
                     .overlay(
-                        Circle().stroke(T3Color.separator, lineWidth: 0.5)
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
                     )
             }
             .buttonStyle(.plain)

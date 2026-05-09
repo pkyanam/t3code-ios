@@ -80,12 +80,19 @@ struct ComposerView: View {
                          maxSelectionCount: maxAttachments,
                          matching: .images) {
                 Image(systemName: "paperclip")
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(attachments.count >= maxAttachments
                                      ? T3Color.textTertiary
                                      : T3Color.textSecondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 34, height: 34)
+                    .background(T3Color.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
+                    )
             }
+            .buttonStyle(.plain)
             .disabled(attachments.count >= maxAttachments)
 
             sendOrStopButton
@@ -100,21 +107,31 @@ struct ComposerView: View {
             } label: {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
-                    .background(T3Color.danger)
-                    .clipShape(Circle())
+                    .foregroundStyle(T3Color.danger)
+                    .background(T3Color.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
+                    )
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Stop turn")
         } else {
             Button(action: send) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
-                    .background(canSend ? accentColor : T3Color.surfaceMuted)
-                    .clipShape(Circle())
+                    .foregroundStyle(canSend ? accentColor : T3Color.textTertiary)
+                    .background(T3Color.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                            .stroke(T3Color.separator, lineWidth: 0.5)
+                    )
             }
+            .buttonStyle(.plain)
             .disabled(!canSend)
             .accessibilityLabel("Send message")
         }
@@ -127,9 +144,13 @@ struct ComposerView: View {
     private var modelChip: some View {
         Button { showModelPicker = true } label: {
             HStack(spacing: 5) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(accentColor)
+                if let driver = currentProviderDriver {
+                    ProviderIcon(driver: driver, size: 13)
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(accentColor)
+                }
                 Text(modelName)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(T3Color.textPrimary)
@@ -140,13 +161,26 @@ struct ComposerView: View {
             }
             .padding(.horizontal, T3Spacing.sm)
             .padding(.vertical, 6)
-            .background(T3Color.surfaceMuted, in: Capsule())
-            .overlay(Capsule().stroke(T3Color.separator, lineWidth: 0.5))
+            .background(
+                RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                    .fill(T3Color.surfaceElevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                    .stroke(T3Color.separator, lineWidth: 0.5)
+            )
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showModelPicker) {
             modelPickerSheet
         }
+    }
+
+    private var currentProviderDriver: String? {
+        guard let selection = store.detail?.modelSelection else { return nil }
+        return env.serverConfig?.providers
+            .first { $0.instanceId == selection.instanceId }?
+            .driver
     }
 
     private var modelPickerSheet: some View {

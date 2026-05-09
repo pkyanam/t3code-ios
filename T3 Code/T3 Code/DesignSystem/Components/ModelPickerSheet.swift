@@ -68,9 +68,8 @@ struct ModelPickerSheet: View {
                 selectedProviderId = provider.instanceId
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: providerIcon(for: provider.driver))
-                    .font(.system(size: 10, weight: .semibold))
+            HStack(spacing: 6) {
+                ProviderIcon(driver: provider.driver, size: 14)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(provider.brandDisplayName)
                         .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
@@ -163,16 +162,16 @@ struct ModelPickerSheet: View {
             dismiss()
         } label: {
             HStack(spacing: T3Spacing.md) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(entry.model.label)
                         .font(T3Typography.body)
                         .foregroundStyle(T3Color.textPrimary)
-                    if entry.provider.driver == "opencode" {
-                        opencodeSubtitle(entry)
-                    } else if let upstream = entry.provider.upstreamVendorLabel(forModelSlug: entry.model.slug) {
-                        Text(upstream)
+                    HStack(spacing: 5) {
+                        ProviderIcon(driver: entry.provider.driver, size: 11)
+                        Text(modelRowSubtitle(entry))
                             .font(T3Typography.caption)
                             .foregroundStyle(T3Color.textTertiary)
+                            .lineLimit(1)
                     }
                 }
                 Spacer(minLength: T3Spacing.sm)
@@ -189,20 +188,21 @@ struct ModelPickerSheet: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private func opencodeSubtitle(_ entry: ModelCatalogEntry) -> some View {
-        if let sp = entry.model.subProvider, !sp.isEmpty {
-            Text(sp)
-                .font(T3Typography.caption.weight(.semibold))
-                .foregroundStyle(T3Color.textSecondary)
-                .lineLimit(2)
+    private func modelRowSubtitle(_ entry: ModelCatalogEntry) -> String {
+        let brand = entry.provider.brandDisplayName
+        if entry.provider.driver == "opencode" {
+            if let sp = entry.model.subProvider?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !sp.isEmpty {
+                return "\(brand) · \(sp)"
+            }
+            if let bucket = entry.opencodeBucket, bucket != .standard {
+                return "\(brand) · \(bucket.sectionSuffix)"
+            }
         }
         if let upstream = entry.provider.upstreamVendorLabel(forModelSlug: entry.model.slug) {
-            Text(upstream)
-                .font(T3Typography.caption)
-                .foregroundStyle(T3Color.textTertiary)
-                .lineLimit(1)
+            return "\(brand) · \(upstream)"
         }
+        return brand
     }
 
     private func isSelected(_ entry: ModelCatalogEntry) -> Bool {
@@ -213,16 +213,5 @@ struct ModelPickerSheet: View {
 
     private func providerSections(_ provider: ServerProvider) -> [ModelCatalogSection] {
         ModelCatalogSection.grouped(providers: [provider])
-    }
-
-    private func providerIcon(for driver: String) -> String {
-        switch driver {
-        case "opencode": return "sparkles"
-        case "claudeAgent": return "brain.head.profile"
-        case "cursor": return "cursorarrow"
-        case "openaiChat", "openAIChat", "openai": return "bolt.fill"
-        case "gemini", "googleGemini": return "circle.hexagongrid.fill"
-        default: return "cpu.fill"
-        }
     }
 }

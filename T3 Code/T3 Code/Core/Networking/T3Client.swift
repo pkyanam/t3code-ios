@@ -462,6 +462,85 @@ extension T3Client {
         }
         return String(seed.prefix(77)) + "..."
     }
+
+    // MARK: - Git / VCS
+
+    func refreshVcsStatus(cwd: String) async throws -> VcsStatusSummary {
+        let payload: [String: Any] = ["cwd": cwd]
+        guard let value = try await request(method: "vcs.refreshStatus", payload: payload) else {
+            throw T3Error.decodingFailed("Empty vcs.refreshStatus response")
+        }
+        return try VcsStatusSummary.decode(from: value)
+    }
+
+    func vcsPull(cwd: String) async throws -> VcsPullSummary {
+        let payload: [String: Any] = ["cwd": cwd]
+        guard let value = try await request(method: "vcs.pull", payload: payload) else {
+            throw T3Error.decodingFailed("Empty vcs.pull response")
+        }
+        return try VcsPullSummary.decode(from: value)
+    }
+
+    func runGitStackedAction(cwd: String,
+                             action: GitStackedAction,
+                             commitMessage: String? = nil) async throws -> GitActionSummary {
+        let actionId = UUID().uuidString
+        var payload: [String: Any] = [
+            "actionId": actionId,
+            "cwd": cwd,
+            "action": action.rawValue
+        ]
+        if let commitMessage {
+            let trimmed = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                payload["commitMessage"] = trimmed
+            }
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            var didResume = false
+            let lock = NSLock()
+
+            func resumeOnce(_ result: Result<GitActionSummary, Error>) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !didResume else { return }
+                didResume = true
+                continuation.resume(with: result)
+            }
+
+            Task {
+                do {
+                    let subscription = try await subscribe(method: "git.runStackedAction", payload: payload) {
+                        value in
+                        guard let dict = value as? [String: Any],
+                              let kind = dict["kind"] as? String else { return }
+                        switch kind {
+                        case "action_finished":
+                            let result = (dict["result"] as? [String: Any]) ?? [:]
+                            let toast = (result["toast"] as? [String: Any]) ?? [:]
+                            let title = (toast["title"] as? String) ?? "Action completed"
+                            let description = toast["description"] as? String
+                            resumeOnce(.success(.init(toastTitle: title, toastDescription: description)))
+                        case "action_failed":
+                            let message = (dict["message"] as? String) ?? "Git action failed."
+                            resumeOnce(.failure(T3Error.requestFailed(message)))
+                        default:
+                            break
+                        }
+                    }
+
+                    Task.detached {
+                        try? await Task.sleep(nanoseconds: 120_000_000_000)
+                        await subscription.cancel()
+                        resumeOnce(.failure(T3Error.requestFailed("Git action timed out.")))
+                    }
+                } catch {
+                    resumeOnce(.failure(error))
+                }
+            }
+        }
+    }
 }
 
 struct UploadImage: Sendable {

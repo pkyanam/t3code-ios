@@ -84,15 +84,21 @@ struct PendingApprovalCard: View {
         } label: {
             HStack(spacing: T3Spacing.xs) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                 Text(decision.label)
-                    .font(T3Typography.bodyEmphasis)
+                    .font(.system(size: 13, weight: .medium))
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(background)
+            .padding(.vertical, 8)
             .foregroundStyle(foreground)
-            .clipShape(RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                    .fill(background)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: T3Radius.md, style: .continuous)
+                    .stroke(T3Color.separator, lineWidth: 0.5)
+            )
         }
         .buttonStyle(.plain)
     }
